@@ -9,6 +9,8 @@ from tests import TestCase
 from quodlibet import config
 
 from quodlibet.browsers.collection import *
+from quodlibet.browsers.collection.models import *
+from quodlibet.browsers.collection.prefs import *
 from quodlibet.formats._audio import AudioFile
 from quodlibet.library import SongLibrary
 
@@ -97,6 +99,9 @@ class TCollectionAlbums(TestCase):
 
         for r in model:
             self.failUnless(model.get_markup(model.tags, r.iter))
+
+        x = list(model.iter_albums(None))
+        self.assertEqual(set(x), set(a))
 
 
 class TCollectionBrowser(TestCase):

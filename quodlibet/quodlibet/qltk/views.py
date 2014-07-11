@@ -12,7 +12,7 @@ from gi.repository import Gtk, Gdk, GObject, Pango, GLib
 import cairo
 
 from quodlibet import config
-from quodlibet.qltk import get_top_parent, is_accel, is_wayland
+from quodlibet.qltk import get_top_parent, is_accel, is_wayland, gtk_version
 
 
 class TreeViewHints(Gtk.Window):
@@ -69,7 +69,8 @@ class TreeViewHints(Gtk.Window):
         self.set_accept_focus(False)
         self.set_resizable(False)
         self.set_name("gtk-tooltip")
-        self.set_border_width(1)
+        if gtk_version < (3, 13):
+            self.set_border_width(1)
         self.connect('leave-notify-event', self.__undisplay)
 
         self.__handlers = {}
@@ -236,9 +237,10 @@ class TreeViewHints(Gtk.Window):
             return False
 
         dummy, ox, oy = view.get_window().get_origin()
+        bg_area = view.get_background_area(path, None)
 
         # save for adjusting passthrough events
-        self.__dx, self.__dy = col_area.x + render_offset, col_area.y
+        self.__dx, self.__dy = col_area.x + render_offset, bg_area.y
         if expand_left:
             # shift to the left
             # FIXME: ellipsize start produces a space at the end depending
@@ -251,7 +253,7 @@ class TreeViewHints(Gtk.Window):
         x, y = view.convert_bin_window_to_widget_coords(x, y)
 
         w = label_width
-        h = col_area.height
+        h = bg_area.height
 
         if not is_wayland():
             # clip if it's bigger than the screen

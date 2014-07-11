@@ -183,6 +183,7 @@ class Collection(object):
             return None
         elif key[:1] == "~":
             key = key[1:]
+            numkey = key.split(":")[0]
             keys = {"people": {}, "peoplesort": {}}
             if key in keys:
                 people = keys["people"]
@@ -219,33 +220,33 @@ class Collection(object):
                     self.__used.append(other)
                     self.__cache[other] = "\n".join(values)
                 return ret
-            elif key == "length":
-                length = self.__get_value("~#length")
+            elif numkey == "length":
+                length = self.__get_value("~#" + key)
                 return None if length is None else util.format_time(length)
-            elif key == "long-length":
-                length = self.__get_value("~#length")
+            elif numkey == "long-length":
+                length = self.__get_value("~#" + key[5:])
                 return (None if length is None
                         else util.format_time_long(length))
-            elif key == "tracks":
-                tracks = self.__get_value("~#tracks")
+            elif numkey == "tracks":
+                tracks = self.__get_value("~#" + key)
                 return (None if tracks is None else
                         ngettext("%d track", "%d tracks", tracks) % tracks)
-            elif key == "discs":
-                discs = self.__get_value("~#discs")
+            elif numkey == "discs":
+                discs = self.__get_value("~#" + key)
                 if discs > 1:
                     return ngettext("%d disc", "%d discs", discs) % discs
                 else:
                     # TODO: check this is correct for discs == 1
                     return None
-            elif key == "rating":
-                rating = self.__get_value("~#rating")
+            elif numkey == "rating":
+                rating = self.__get_value("~#" + key)
                 if rating is None:
                     return None
                 return util.format_rating(rating)
             elif key == "cover":
                 return ((self.cover != type(self).cover) and "y") or None
-            elif key == "filesize":
-                size = self.__get_value("~#filesize")
+            elif numkey == "filesize":
+                size = self.__get_value("~#" + key)
                 return None if size is None else util.format_size(size)
             key = "~" + key
 
@@ -265,7 +266,7 @@ class Album(Collection):
     """Like a `Collection` but adds cover scanning, some attributes for sorting
     and uses a set for the songs."""
 
-    COVER_SIZE = 48
+    COVER_SIZE = 50
 
     cover = None
     scanned = False
@@ -298,7 +299,7 @@ class Album(Collection):
         self.__dict__.pop("peoplesort", None)
         self.__dict__.pop("genre", None)
 
-    def scan_cover(self, force=False):
+    def scan_cover(self, force=False, scale_factor=1):
         if (self.scanned and not force) or not self.songs:
             return
         self.scanned = True
@@ -307,11 +308,13 @@ class Album(Collection):
         cover = song.find_cover()
 
         if cover is not None:
-            s = self.COVER_SIZE
+            s = self.COVER_SIZE * scale_factor - scale_factor * 2
+
             try:
                 round = config.getboolean("albumart", "round")
                 self.cover = thumbnails.get_thumbnail(cover.name, (s, s))
-                self.cover = thumbnails.add_border(self.cover, 30, round)
+                self.cover = thumbnails.add_border(
+                    self.cover, 30, round=round, width=scale_factor)
             except GLib.GError:
                 return
 

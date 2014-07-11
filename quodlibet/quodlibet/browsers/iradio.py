@@ -419,10 +419,9 @@ class CloseButton(Gtk.Button):
         image = Gtk.Image(visible=True, can_focus=False,
                           icon_name="window-close-symbolic")
 
-        # Gtk.Align.CENTER (3) broken on Windows with gtk 3.8
         super(CloseButton, self).__init__(
             visible=False, can_focus=True, image=image,
-            relief=Gtk.ReliefStyle.NONE, valign=3)
+            relief=Gtk.ReliefStyle.NONE, valign=Gtk.Align.CENTER)
 
         ctx = self.get_style_context()
         ctx.add_class("raised")
@@ -455,11 +454,7 @@ class QuestionBar(Gtk.InfoBar):
 
         try:
             self.set_show_close_button(True)
-        except (AttributeError, GLib.GError):
-            # On Windows we use GTK+3.8 but the typelib is from 3.10.
-            # As a result libgirepository throws GError here because the
-            # library symbol is missing
-
+        except AttributeError:
             # < gtk3.10
             action = self.get_action_area()
             close_button = CloseButton()
@@ -626,7 +621,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         box.pack_start(search, True, True, 0)
         box.pack_start(button, False, True, 0)
         if main:
-            self._searchbox = Alignment(box, left=0, right=6)
+            self._searchbox = Alignment(box, left=0, right=6, top=6)
         else:
             self._searchbox = box
         self._searchbox.show_all()

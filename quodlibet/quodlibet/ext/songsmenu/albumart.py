@@ -29,9 +29,13 @@ from quodlibet.util import format_size, print_exc
 
 from quodlibet import util, qltk, print_w, app
 from quodlibet.qltk.views import AllTreeView
+from quodlibet.qltk.image import (set_renderer_from_pbosf, get_scale_factor,
+    get_pbosf_for_pixbuf, set_image_from_pbosf)
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 from quodlibet.parse import Pattern
 from quodlibet.util.path import fsencode, iscommand
+from quodlibet.util import thumbnails
+
 
 USER_AGENT = "Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.2.13) " \
     "Gecko/20101210 Iceweasel/3.6.13 (like Firefox/3.6.13)"
@@ -82,310 +86,6 @@ def get_encoding(url):
     request.add_header('User-Agent', USER_AGENT)
     url_sock = urllib2.urlopen(request)
     return get_encoding_from_socket(url_sock)
-
-
-class BasicHTMLParser(HTMLParser, object):
-    """Basic Parser, stores all tags in a 3-tuple with tagname, attrs and data
-    between the start tags. Ignores nesting but gives a consistent structure.
-    All in all an ugly hack."""
-
-    encoding = "utf-8"
-
-    def __init__(self):
-        super(BasicHTMLParser, self).__init__()
-
-        self.data = []
-        self.__buffer = []
-        # Make the crappy HTMLParser ignore more stuff
-        self.CDATA_CONTENT_ELEMENTS = ()
-
-    def parse_url(self, url, post={}, get={}):
-        """Will read the data and parse it into the data variable.
-        A tag will be ['tagname', {all attributes}, 'data until the next tag']
-        Only start tags are handled / used."""
-
-        self.data = []
-
-        text, self.encoding = get_url(url, post, get)
-        text = text.decode(self.encoding, 'replace')
-
-        # Strip script tags/content. HTMLParser doesn't handle them well
-        text = "".join([p.split("script>")[-1] for p in text.split("<script")])
-
-        try:
-            self.feed(text)
-            self.close()
-        except HTMLParseError:
-            pass
-
-    def handle_starttag(self, tag, attrs):
-        if self.__buffer:
-            self.__buffer.append('')
-            self.data.append(self.__buffer)
-            self.__buffer = []
-        self.__buffer = [tag, dict(attrs)]
-
-    def handle_data(self, data):
-        if self.__buffer:
-            self.__buffer.append(data)
-            self.data.append(self.__buffer)
-            self.__buffer = []
-        else:
-            self.data.append(['', {}, data])
-
-
-class CoverParadiseParser(BasicHTMLParser):
-    """A class for searching covers from coverparadise.to"""
-
-    ROOT_URL = 'http://coverparadise.to'
-
-    def start(self, query, limit=10):
-        """Start the search and return a list of covers"""
-
-        if isinstance(query, str):
-            query = query.decode("utf-8")
-
-        # Site only takes 3+ chars
-        if len(query) < 3:
-                return []
-
-        query = query.encode(get_encoding(self.ROOT_URL))
-
-        # Parse the first page
-        self.__parse_search_list(query)
-
-        # Get the max number of offsets and the step size
-        max_offset = -1
-        step_size = 0
-        for i, (tag, attr, data) in enumerate(self.data):
-            if "SimpleSearchPage" in attr.get("href", ""):
-                offset = int(attr["href"].split(",")[1].strip("' "))
-                if offset > max_offset:
-                    step_size = step_size or (offset - max_offset)
-                    max_offset = offset
-
-        if max_offset == -1:
-            # If there is no offset, this is a single result page
-            covers = self.__extract_from_single()
-        else:
-            # otherwise parse it as a list for each page
-            covers = self.__extract_from_list()
-            for offset in range(step_size, max_offset + 1, step_size):
-                if len(covers) >= limit:
-                    break
-                self.__parse_search_list(query, offset)
-                covers.extend(self.__extract_from_list())
-
-        del self.data
-        return covers
-
-    def __parse_search_list(self, query, offset=0):
-        post = {
-            "SearchString": query,
-            "Page": offset,
-            "Sektion": "2",
-        }
-
-        self.parse_url(self.ROOT_URL + '/?Module=SimpleSearch', post=post)
-
-    def __extract_from_single(self):
-        covers = []
-
-        cover = None
-        for i, (tag, attr, data) in enumerate(self.data):
-            data = data.strip()
-
-            if attr.get("class", "") == "ThumbDetails":
-                cover = {"source": self.ROOT_URL}
-
-            if cover:
-                if attr.get("href"):
-                    cover["cover"] = self.ROOT_URL + attr["href"]
-
-                if attr.get("src") and "thumbnail" not in cover:
-                    cover["thumbnail"] = attr["src"]
-                    if "front" not in attr.get("alt").lower():
-                        cover = None
-                        continue
-
-                if attr.get("title"):
-                    cover["name"] = attr["title"]
-
-                if tag == "br":
-                    if data.endswith("px"):
-                        cover["resolution"] = data.strip("@ ")
-                    elif data.lower().endswith("b"):
-                        cover["size"] = data.strip("@ ")
-
-                if len(cover.keys()) >= 6:
-                    covers.append(cover)
-                    cover = None
-
-        return covers
-
-    def __extract_from_list(self):
-        covers = []
-
-        cover = None
-        old_data = ""
-        last_entry = ""
-        for i, (tag, attr, data) in enumerate(self.data):
-            data = data.strip()
-
-            if "ViewEntry" in attr.get("href", "") and \
-                    attr.get("href") != last_entry:
-                cover = {"source": self.ROOT_URL}
-                last_entry = attr.get("href")
-
-            if cover:
-                if attr.get("src") and "thumbnail" not in cover:
-                    cover["thumbnail"] = attr["src"]
-
-                    uid = attr["src"].rsplit("/")[-1].split(".")[0]
-                    url = self.ROOT_URL + "/res/exe/GetElement.php?ID=" + uid
-                    cover["cover"] = url
-
-                if data and "name" not in cover:
-                    cover["name"] = data
-
-                if "dimension" in old_data.lower() and data:
-                    cover["resolution"] = data
-
-                if "filesize" in old_data.lower() and data:
-                    cover["size"] = data
-
-                if len(cover.keys()) >= 6:
-                    covers.append(cover)
-                    cover = None
-
-            old_data = data
-
-        return covers
-
-
-class DiscogsParser(object):
-    """A class for searching covers from discogs.com"""
-
-    def __init__(self):
-        self.api_key = 'e404383a2a'
-        self.url = 'http://www.discogs.com'
-        self.cover_list = []
-        self.limit = 0
-        self.limit_count = 0
-
-    def __get_search_page(self, page, query):
-        """Returns the XML DOM of a search result page. Starts with 1."""
-
-        search_url = self.url + '/search'
-        search_paras = {
-            'type': 'releases',
-            'q': query,
-            'f': 'xml',
-            'api_key': self.api_key,
-            'page': page,
-        }
-
-        data, enc = get_url(search_url, get=search_paras)
-        return minidom.parseString(data)
-
-    def __parse_list(self, dom):
-        """Returns a list with the album name and the uri.
-        Since the naming of releases in the specific release pages
-        seems complex.. use the one from the search result page."""
-
-        list = []
-        results = dom.getElementsByTagName('result')
-        for result in results:
-            uri_tag = result.getElementsByTagName('uri')[0]
-            uri = uri_tag.firstChild.data
-            name = result.getElementsByTagName('title')[0].firstChild.data
-            list.append((uri, name))
-
-        return list
-
-    def __parse_release(self, url, name):
-        """Parse the release page and add the cover to the list."""
-
-        if len(self.cover_list) >= self.limit:
-            return
-
-        rel_paras = {
-            'api_key': self.api_key,
-            'f': 'xml',
-        }
-
-        data, enc = get_url(url, get=rel_paras)
-        dom = minidom.parseString(data)
-        imgs = dom.getElementsByTagName('image')
-        cover = {}
-
-        for img in imgs:
-            if img.getAttribute('type') == 'primary':
-                width = img.getAttribute('width')
-                height = img.getAttribute('height')
-                cover = {
-                    'cover': img.getAttribute('uri'),
-                    'resolution': '%s x %s px' % (width, height),
-                    'thumbnail': img.getAttribute('uri150'),
-                    'name': name,
-                    'size': get_size_of_url(cover['cover']),
-                    'source': self.url,
-                }
-                break
-
-        if cover and len(self.cover_list) < self.limit:
-            self.cover_list.append(cover)
-
-    def start(self, query, limit=10):
-        """Start the search and return the covers"""
-
-        self.limit = limit
-        self.limit_count = 0
-        self.cover_list = []
-
-        page = 1
-        limit_stop = False
-
-        while 1:
-            dom = self.__get_search_page(page, query)
-
-            result = dom.getElementsByTagName('searchresults')
-
-            if not result:
-                break
-
-            # Number of all results
-            all = int(result[0].getAttribute('numResults'))
-            # Last result number on the page
-            end = int(result[0].getAttribute('end'))
-
-            urls = self.__parse_list(dom)
-
-            thread_list = []
-            for url, name in urls:
-                self.limit_count += 1
-
-                thr = threading.Thread(target=self.__parse_release,
-                                       args=(url, name))
-                thr.setDaemon(True)
-                thr.start()
-                thread_list.append(thr)
-
-                # Don't search forever if there are many entries with no image
-                # In the default case of limit=10 this will prevent searching
-                # the second result page...
-                if self.limit_count >= self.limit * 2:
-                    limit_stop = True
-                    break
-
-            for thread in thread_list:
-                thread.join()
-
-            if end >= all or limit_stop:
-                break
-
-            page += 1
-        return self.cover_list
 
 
 class AmazonParser(object):
@@ -669,52 +369,33 @@ class CoverArea(Gtk.VBox, PluginConfigMixin):
 
     def __update(self, loader, *data):
         """Update the picture while it's loading"""
+
         if self.stop_loading:
             return
         pixbuf = loader.get_pixbuf()
-        GLib.idle_add(self.image.set_from_pixbuf, pixbuf)
+
+        def idle_set():
+            set_image_from_pbosf(self.image, pixbuf)
+
+        GLib.idle_add(idle_set)
 
     def __scale_pixbuf(self, *data):
         if not self.current_pixbuf:
             return
         pixbuf = self.current_pixbuf
 
-        if self.window_fit.get_active():
-            pb_width = pixbuf.get_width()
-            pb_height = pixbuf.get_height()
-
+        if not self.window_fit.get_active():
+            pbosf = pixbuf
+        else:
             alloc = self.scrolled.get_allocation()
             width = alloc.width
             height = alloc.height
+            scale_factor = get_scale_factor(self)
+            boundary = (width * scale_factor, height * scale_factor)
+            pixbuf = thumbnails.scale(pixbuf, boundary, scale_up=False)
+            pbosf = get_pbosf_for_pixbuf(self, pixbuf)
 
-            if pb_width > width or pb_height > height:
-                pb_ratio = float(pb_width) / pb_height
-                win_ratio = float(width) / height
-
-                if pb_ratio > win_ratio:
-                    scale_w = width
-                    scale_h = int(width / pb_ratio)
-                else:
-                    scale_w = int(height * pb_ratio)
-                    scale_h = height
-
-                # The size is wrong if the window is about to close
-                if scale_w <= 0 or scale_h <= 0:
-                    return
-
-                thr = threading.Thread(
-                    target=self.__scale_async,
-                    args=(pixbuf, scale_w, scale_h))
-                thr.setDaemon(True)
-                thr.start()
-            else:
-                self.image.set_from_pixbuf(pixbuf)
-        else:
-            self.image.set_from_pixbuf(pixbuf)
-
-    def __scale_async(self, pixbuf, w, h):
-            pixbuf = pixbuf.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR)
-            GLib.idle_add(self.image.set_from_pixbuf, pixbuf)
+        set_image_from_pbosf(self.image, pbosf)
 
     def __close(self, loader, *data):
         if self.stop_loading:
@@ -816,6 +497,7 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
     """The main window including the search list"""
 
     CONFIG_SECTION = PLUGIN_CONFIG_SECTION
+    THUMB_SIZE = 50
 
     def __init__(self, songs):
         super(AlbumArtWindow, self).__init__()
@@ -830,7 +512,7 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
 
         image = CoverArea(self, songs[0])
 
-        self.liststore = Gtk.ListStore(GdkPixbuf.Pixbuf, object)
+        self.liststore = Gtk.ListStore(object, object)
         self.treeview = treeview = AllTreeView(self.liststore)
         self.treeview.set_headers_visible(False)
         self.treeview.set_rules_hint(True)
@@ -851,13 +533,19 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
         rend_pix = Gtk.CellRendererPixbuf()
         img_col = Gtk.TreeViewColumn('Thumb')
         img_col.pack_start(rend_pix, False)
-        img_col.add_attribute(rend_pix, 'pixbuf', 0)
+
+        def cell_data_pb(column, cell, model, iter_, *args):
+            pbosf = model[iter_][0]
+            set_renderer_from_pbosf(cell, pbosf)
+
+        img_col.set_cell_data_func(rend_pix, cell_data_pb, None)
         treeview.append_column(img_col)
 
         rend_pix.set_property('xpad', 2)
         rend_pix.set_property('ypad', 2)
-        rend_pix.set_property('width', 56)
-        rend_pix.set_property('height', 56)
+        border_width = get_scale_factor(self) * 2
+        rend_pix.set_property('width', self.THUMB_SIZE + 4 + border_width)
+        rend_pix.set_property('height', self.THUMB_SIZE + 4 + border_width)
 
         def escape_data(data):
             for rep in ('\n', '\t', '\r', '\v'):
@@ -989,15 +677,13 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
             pbloader.write(get_url(cover['thumbnail'])[0])
             pbloader.close()
 
-            size = 48
-
+            scale_factor = get_scale_factor(self)
+            size = self.THUMB_SIZE * scale_factor - scale_factor * 2
             pixbuf = pbloader.get_pixbuf().scale_simple(size, size,
                 GdkPixbuf.InterpType.BILINEAR)
-
-            thumb = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, True, 8,
-                                         size + 2, size + 2)
-            thumb.fill(0x000000ff)
-            pixbuf.copy_area(0, 0, size, size, thumb, 1, 1)
+            pixbuf = thumbnails.add_border(
+                pixbuf, 80, round=True, width=scale_factor)
+            thumb = get_pbosf_for_pixbuf(self, pixbuf)
         except (GLib.GError, IOError):
             pass
         else:
@@ -1114,23 +800,11 @@ def get_size_of_url(url):
 #------------------------------------------------------------------------------
 engines = [
     {
-        'class': CoverParadiseParser,
-        'url': 'http://www.coverparadise.to/',
-        'replace': '*',
-        'config_id': 'coverparadise',
-    },
-    {
         'class': AmazonParser,
         'url': 'http://www.amazon.com/',
         'replace': ' ',
         'config_id': 'amazon',
     },
-    # {
-    #     'class': DiscogsParser,
-    #     'url': 'http://www.discogs.com/',
-    #     'replace': ' ',
-    #     'config_id': 'discogs',
-    # }
 ]
 #------------------------------------------------------------------------------
 
