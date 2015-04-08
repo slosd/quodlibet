@@ -20,7 +20,7 @@ import os
 import shutil
 import time
 
-from gi.repository import GObject, Gio
+from gi.repository import GObject, Gio, GLib
 
 from quodlibet.formats import MusicFile
 from quodlibet.query import Query
@@ -35,7 +35,7 @@ from quodlibet import const
 from quodlibet import formats
 from quodlibet.util.dprint import print_d, print_w
 from quodlibet.util.path import fsdecode, expanduser, unexpand, mkdir, \
-    normalize_path, fsencode, is_fsnative
+    normalize_path
 
 
 class Library(GObject.GObject, DictMixin):
@@ -846,12 +846,10 @@ class WatchedFileLibrary(FileLibrary):
     def monitor_dir(self, path):
         """Monitors a single directory"""
 
-        assert is_fsnative(path)
-
         normalised = normalize_path(path, True)
         # Only add one monitor per absolute path...
         if normalised not in self.__monitors:
-            f = Gio.File.new_for_path(fsencode(normalised))
+            f = Gio.File.new_for_path(normalised)
             try:
                 monitor = f.monitor_directory(Gio.FileMonitorFlags.NONE, None)
             except GLib.GError:
@@ -864,7 +862,7 @@ class WatchedFileLibrary(FileLibrary):
         file_path = main_file.get_path()
         if file_path is None:
             return
-        file_path = normalize_path(util.fsnative(file_path), True)
+        file_path = normalize_path(file_path, True)
 
         if event == Gio.FileMonitorEvent.CREATED:
             if os.path.isdir(file_path):
@@ -920,13 +918,10 @@ class WatchedFileLibrary(FileLibrary):
             print_d("Unhandled event %s on %s" % (event, file_path))
 
     def is_monitored_dir(self, path):
-        assert is_fsnative(path)
         return path in self.__monitors
 
     def unmonitor_dir(self, path):
         """Disconnect and remove any monitor for a directory, if found"""
-
-        assert is_fsnative(path)
 
         monitor, handler_id = self.__monitors.get(path, (None, None))
         if not monitor:
