@@ -521,7 +521,7 @@ class TWatchedFileLibrary(TFileLibrary):
     def tearDown(self):
         super(TWatchedFileLibrary, self).tearDown()
         config.quit()
-        const.DEBUG = False
+        #const.DEBUG = False
 
     def _stub_add_filename(self, filename, add=True):
         if filename not in self.library._contents:
@@ -534,7 +534,7 @@ class TWatchedFileLibrary(TFileLibrary):
         return song
 
     def test_monitor_dir(self):
-        const.DEBUG = True
+        #const.DEBUG = True
         try:
             self.root = mkdtemp()
             # Stub the implementation to test WatchedFileLibrary directly
