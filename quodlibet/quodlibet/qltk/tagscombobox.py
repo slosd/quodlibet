@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006 Joe Wreschnig
 #
 # This program is free software; you can redistribute it and/or modify
@@ -7,12 +8,11 @@
 from gi.repository import Gtk
 
 from quodlibet.util import tag
-
-import quodlibet.formats
+from quodlibet.util.tags import USER_TAGS
 
 
 class _TagsCombo(object):
-    __tags = sorted(quodlibet.formats.USEFUL_TAGS)
+    __tags = sorted(USER_TAGS)
 
     def _fill_model(self, can_change):
         self.clear()
@@ -32,9 +32,9 @@ class _TagsCombo(object):
         if len(model) == 0:
             raise ValueError("TagsCombo boxes require at least one tag name")
 
-    def __tag(self):
+    @property
+    def tag(self):
         return self._tag()
-    tag = property(__tag)
 
 
 class TagsComboBox(Gtk.ComboBox, _TagsCombo):

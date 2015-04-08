@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012,2014 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -17,14 +18,31 @@ from quodlibet.browsers.albums.main import (compare_title, compare_artist,
     compare_genre, compare_rating, compare_date)
 from quodlibet.formats._audio import AudioFile
 from quodlibet.library import SongLibrary, SongLibrarian
+from quodlibet.util.path import fsnative
 from quodlibet.util.collection import Album
 
 SONGS = [
-    AudioFile({"album": "one", "artist": "piman", "~filename": "/dev/null"}),
-    AudioFile({"album": "two", "artist": "mu", "~filename": "/dev/zero"}),
-    AudioFile({"album": "three", "artist": "boris", "~filename": "/bin/ls"}),
-    AudioFile({"album": "three", "artist": "boris", "~filename": "/bin/ls2"}),
-    ]
+    AudioFile({
+        "album": "one",
+        "artist": "piman",
+        "~filename": fsnative(u"/dev/null"),
+    }),
+    AudioFile({
+        "album": "two",
+        "artist": "mu",
+        "~filename": fsnative(u"/dev/zero"),
+    }),
+    AudioFile({
+        "album": "three",
+        "artist": "boris",
+        "~filename": fsnative(u"/bin/ls"),
+    }),
+    AudioFile({
+        "album": "three",
+        "artist": "boris",
+        "~filename": fsnative(u"/bin/ls2"),
+    }),
+]
 SONGS.sort()
 
 
@@ -133,10 +151,10 @@ class TAlbumBrowser(TestCase):
             af.sanitize()
         library.add(SONGS)
 
-        self.bar = AlbumList(library, True)
+        self.bar = AlbumList(library)
 
         self._id = self.bar.connect("songs-selected", self._selected)
-        self._id2 = self.bar.connect("activated", self._activated)
+        self._id2 = self.bar.connect("songs-activated", self._activated)
         with realized(self.bar):
             self.bar.filter_text("")
             self._wait()

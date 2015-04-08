@@ -7,16 +7,18 @@
 
 import os
 
-from gi.repository import Gtk, Gdk, Gio
+from gi.repository import Gtk, Gdk
 
 from quodlibet import config
 from quodlibet import const
 from quodlibet import util
 from quodlibet import qltk
 
+from quodlibet.util import connect_obj, connect_destroy
 from quodlibet.qltk.ccb import ConfigCheckButton
 from quodlibet.qltk.songlist import SongList, DND_QL, DND_URI_LIST
 from quodlibet.qltk.songsmenu import SongsMenu
+from quodlibet.qltk.songmodel import PlaylistModel
 from quodlibet.qltk.playorder import OrderInOrder, OrderShuffle
 from quodlibet.qltk.x import ScrolledWindow, SymbolicIconImage, \
     SmallImageButton
@@ -56,7 +58,7 @@ class PlaybackStatusIcon(Gtk.Box):
 
 class QueueExpander(Gtk.Expander):
     def __init__(self, menu, library, player):
-        super(QueueExpander, self).__init__()
+        super(QueueExpander, self).__init__(spacing=3)
         sw = ScrolledWindow()
         sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         sw.set_shadow_type(Gtk.ShadowType.IN)
@@ -106,7 +108,7 @@ class QueueExpander(Gtk.Expander):
 
         self.set_label_widget(outer)
         self.add(sw)
-        self.connect_object('notify::expanded', self.__expand, cb, b)
+        connect_obj(self, 'notify::expanded', self.__expand, cb, b)
 
         targets = [
             ("text/x-quodlibet-songs", Gtk.TargetFlags.SAME_APP, DND_QL),
@@ -126,14 +128,17 @@ class QueueExpander(Gtk.Expander):
             util.DeferredSignal(self.__update_count), count_label)
         cb.hide()
 
-        self.connect_object('notify::visible', self.__visible, cb, menu, b)
+        connect_obj(self, 'notify::visible', self.__visible, cb, menu, b)
         self.__update_count(self.model, None, count_label)
 
-        player.connect('song-started', self.__update_state_icon, state_icon)
-        player.connect('paused', self.__update_state_icon_pause,
-                        state_icon, True)
-        player.connect('unpaused', self.__update_state_icon_pause,
-                        state_icon, False)
+        connect_destroy(
+            player, 'song-started', self.__update_state_icon, state_icon)
+        connect_destroy(
+            player, 'paused', self.__update_state_icon_pause,
+            state_icon, True)
+        connect_destroy(
+            player, 'unpaused', self.__update_state_icon_pause,
+            state_icon, False)
 
         # to make the children clickable if mapped
         # ....no idea why, but works
@@ -178,7 +183,7 @@ class QueueExpander(Gtk.Expander):
             text = ngettext("%(count)d song (%(time)s)",
                             "%(count)d songs (%(time)s)",
                             len(model)) % {
-                "count": len(model), "time": util.format_time(time)}
+                "count": len(model), "time": util.format_time_display(time)}
         lab.set_text(text)
 
     def __check_expand(self, model, path, iter, lab):
@@ -209,6 +214,10 @@ class QueueExpander(Gtk.Expander):
         clear.set_property('visible', self.get_expanded())
 
 
+class QueueModel(PlaylistModel):
+    """Own class for debugging"""
+
+
 class PlayQueue(SongList):
 
     sortable = False
@@ -223,13 +232,13 @@ class PlayQueue(SongList):
             self.set_fixed_width(24)
 
     def __init__(self, library, player):
-        super(PlayQueue, self).__init__(library, player)
+        super(PlayQueue, self).__init__(library, player, model_cls=QueueModel)
         self.set_size_request(-1, 120)
         self.connect('row-activated', self.__go_to, player)
 
-        self.connect_object('popup-menu', self.__popup, library)
+        connect_obj(self, 'popup-menu', self.__popup, library)
         self.enable_drop()
-        self.connect_object('destroy', self.__write, self.model)
+        connect_obj(self, 'destroy', self.__write, self.model)
         self.__fill(library)
 
         self.connect('key-press-event', self.__delete_key_pressed)
@@ -241,8 +250,9 @@ class PlayQueue(SongList):
         return False
 
     def __go_to(self, view, path, column, player):
-        self.model.go_to(self.model.get_iter(path))
-        player.next()
+        if player.go_to(self.model.get_iter(path), explicit=True,
+                        source=self.model):
+            player.paused = False
 
     def __fill(self, library):
         try:
@@ -270,7 +280,7 @@ class PlayQueue(SongList):
 
         menu = SongsMenu(
             library, songs, queue=False, remove=False, delete=False,
-            parent=self)
+            ratings=False)
         menu.preseparate()
         remove = Gtk.ImageMenuItem(Gtk.STOCK_REMOVE, use_stock=True)
         qltk.add_fake_accel(remove, "Delete")

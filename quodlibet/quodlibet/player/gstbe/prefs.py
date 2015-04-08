@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2004-2011 Joe Wreschnig, Michael Urman, Steven Robertson,
 #           2011-2014 Christoph Reiter
 #
@@ -12,6 +13,7 @@ from quodlibet import config
 from quodlibet.qltk.ccb import ConfigCheckButton
 from quodlibet.qltk.entry import UndoEntry
 from quodlibet.qltk.x import Button
+from quodlibet.util import connect_obj
 
 
 class GstPlayerPreferences(Gtk.VBox):
@@ -96,5 +98,5 @@ class GstPlayerPreferences(Gtk.VBox):
                 player._print_pipeline()
 
             b = Button("Print Pipeline", Gtk.STOCK_DIALOG_INFO)
-            b.connect_object('clicked', print_bin, player)
+            connect_obj(b, 'clicked', print_bin, player)
             self.pack_start(b, True, True, 0)

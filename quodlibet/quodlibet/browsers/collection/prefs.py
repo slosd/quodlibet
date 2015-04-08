@@ -5,19 +5,15 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
-
-import os
-
 from gi.repository import Gtk
 
-from quodlibet import const
 from quodlibet import config
 from quodlibet import util
 from quodlibet import qltk
 
-from quodlibet.util.path import mkdir
 from quodlibet.qltk.tagscombobox import TagsComboBoxEntry
 from quodlibet.qltk.views import BaseView
+from quodlibet.util import connect_obj
 
 
 def get_headers():
@@ -133,7 +129,8 @@ class PatternEditor(Gtk.HBox):
     def __toggeled(self, render, path, model):
         model[path][1] = not model[path][1]
 
-    def __get_headers(self):
+    @property
+    def headers(self):
         for button in self.__headers.iterkeys():
             if button.get_active():
                 if button == self.__custom:
@@ -141,7 +138,8 @@ class PatternEditor(Gtk.HBox):
                     self.__headers[self.__custom] = model_headers
                 return self.__headers[button]
 
-    def __set_headers(self, new_headers):
+    @headers.setter
+    def headers(self, new_headers):
         for button, headers in self.__headers.iteritems():
             if headers == new_headers:
                 button.set_active(True)
@@ -150,8 +148,6 @@ class PatternEditor(Gtk.HBox):
         else:
             self.__headers[self.__custom] = new_headers
             self.__custom.set_active(True)
-
-    headers = property(__get_headers, __set_headers)
 
     def __selection_changed(self, selection, remove):
         remove.set_sensitive(bool(selection.get_selected()[1]))
@@ -195,27 +191,25 @@ class Preferences(qltk.UniqueWindow):
         editor.headers = get_headers()
 
         apply = Gtk.Button(stock=Gtk.STOCK_APPLY)
-        apply.connect_object("clicked", self.__apply, editor, False)
+        connect_obj(apply, "clicked", self.__apply, editor, False)
 
         cancel = Gtk.Button(stock=Gtk.STOCK_CANCEL)
         cancel.connect("clicked", lambda x: self.destroy())
-
-        ok = Gtk.Button(stock=Gtk.STOCK_OK)
-        ok.connect_object("clicked", self.__apply, editor, True)
 
         box = Gtk.HButtonBox()
         box.set_spacing(6)
         box.set_layout(Gtk.ButtonBoxStyle.END)
         box.pack_start(apply, True, True, 0)
-        box.pack_start(cancel, True, True, 0)
-        box.pack_start(ok, True, True, 0)
+        self.use_header_bar()
+        if not self.has_close_button():
+            box.pack_start(cancel, True, True, 0)
 
         vbox.pack_start(editor, True, True, 0)
         vbox.pack_start(box, False, True, 0)
 
         self.add(vbox)
 
-        ok.grab_focus()
+        apply.grab_focus()
         self.show_all()
 
     def __apply(self, editor, close):

@@ -14,12 +14,16 @@ from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
 
-from quodlibet.parse import FileFromPattern
-from quodlibet.qltk._editpane import EditPane, FilterCheckButton
-from quodlibet.qltk._editpane import EditingPluginHandler
+from quodlibet.plugins import PluginManager
+from quodlibet.pattern import FileFromPattern
+from quodlibet.qltk._editutils import FilterPluginBox, FilterCheckButton
+from quodlibet.qltk._editutils import EditingPluginHandler
 from quodlibet.qltk.views import TreeViewColumn
+from quodlibet.qltk.cbes import ComboBoxEntrySave
+from quodlibet.qltk.models import ObjectStore
 from quodlibet.qltk.wlw import WritingWindow
-from quodlibet.util.path import fsdecode, fsencode
+from quodlibet.util import connect_obj
+from quodlibet.util.path import fsdecode, fsnative
 from quodlibet.util.path import strip_win32_incompat_from_path
 
 
@@ -48,8 +52,7 @@ class StripWindowsIncompat(FilterCheckButton):
             self.set_no_show_all(True)
 
     def filter(self, original, filename):
-        assert isinstance(filename, unicode)
-        return fsdecode(strip_win32_incompat_from_path(fsencode(filename)))
+        return strip_win32_incompat_from_path(filename)
 
 
 class StripDiacriticals(FilterCheckButton):
@@ -59,8 +62,9 @@ class StripDiacriticals(FilterCheckButton):
     _order = 1.2
 
     def filter(self, original, filename):
-        return filter(lambda s: not unicodedata.combining(s),
-                      unicodedata.normalize('NFKD', filename))
+        filename = fsdecode(filename)
+        return fsnative(filter(lambda s: not unicodedata.combining(s),
+                               unicodedata.normalize('NFKD', filename)))
 
 
 class StripNonASCII(FilterCheckButton):
@@ -70,7 +74,9 @@ class StripNonASCII(FilterCheckButton):
     _order = 1.3
 
     def filter(self, original, filename):
-        return u"".join(map(lambda s: (s <= "~" and s) or u"_", filename))
+        filename = fsdecode(filename)
+        return fsnative(
+            u"".join(map(lambda s: (s <= "~" and s) or u"_", filename)))
 
 
 class Lowercase(FilterCheckButton):
@@ -88,40 +94,126 @@ class RenameFilesPluginHandler(EditingPluginHandler):
     Kind = RenameFilesPlugin
 
 
-class RenameFiles(EditPane):
+class Entry(object):
+
+    def __init__(self, song):
+        self.song = song
+
+    new_name = None
+    """new name as unicode or None if not set"""
+
+    @property
+    def name(self):
+        return fsdecode(self.song("~basename"))
+
+
+class RenameFiles(Gtk.VBox):
     title = _("Rename Files")
     FILTERS = [SpacesToUnderscores, StripWindowsIncompat, StripDiacriticals,
                StripNonASCII, Lowercase]
     handler = RenameFilesPluginHandler()
 
-    def __init__(self, parent, library):
-        super(RenameFiles, self).__init__(
-            const.NBP, const.NBP_EXAMPLES.split("\n"))
+    @classmethod
+    def init_plugins(cls):
+        PluginManager.instance.register_handler(cls.handler)
 
-        column = TreeViewColumn(
-            _('File'), Gtk.CellRendererText(), text=1)
+    def __init__(self, parent, library):
+        super(RenameFiles, self).__init__(spacing=6)
+        self.set_border_width(12)
+
+        hbox = Gtk.HBox(spacing=6)
+        cbes_defaults = const.NBP_EXAMPLES.split("\n")
+        self.combo = ComboBoxEntrySave(const.NBP, cbes_defaults,
+            title=_("Path Patterns"),
+            edit_title=_(u"Edit saved patterns…"))
+        self.combo.show_all()
+        hbox.pack_start(self.combo, True, True, 0)
+        self.preview = qltk.Button(_("_Preview"), Gtk.STOCK_CONVERT)
+        self.preview.show()
+        hbox.pack_start(self.preview, False, True, 0)
+        self.pack_start(hbox, False, True, 0)
+        self.combo.get_child().connect('changed', self._changed)
+
+        model = ObjectStore()
+        self.view = Gtk.TreeView(model=model)
+        self.view.show()
+
+        sw = Gtk.ScrolledWindow()
+        sw.set_shadow_type(Gtk.ShadowType.IN)
+        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sw.add(self.view)
+        self.pack_start(sw, True, True, 0)
+
+        self.pack_start(Gtk.VBox(), False, True, 0)
+
+        filter_box = FilterPluginBox(self.handler, self.FILTERS)
+        filter_box.connect("preview", self.__filter_preview)
+        filter_box.connect("changed", self.__filter_changed)
+        self.filter_box = filter_box
+        self.pack_start(filter_box, False, True, 0)
+
+        # Save button
+        self.save = Gtk.Button(stock=Gtk.STOCK_SAVE)
+        self.save.show()
+        bbox = Gtk.HButtonBox()
+        bbox.set_layout(Gtk.ButtonBoxStyle.END)
+        bbox.pack_start(self.save, True, True, 0)
+        self.pack_start(bbox, False, True, 0)
+
+        render = Gtk.CellRendererText()
+        column = TreeViewColumn(_('File'), render)
+
+        def cell_data_file(column, cell, model, iter_, data):
+            entry = model.get_value(iter_)
+            cell.set_property("text", entry.name)
+
+        column.set_cell_data_func(render, cell_data_file)
+
         column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
         self.view.append_column(column)
+
         render = Gtk.CellRendererText()
         render.set_property('editable', True)
+        column = TreeViewColumn(_('New Name'), render)
 
-        column = TreeViewColumn(_('New Name'), render, text=2)
+        def cell_data_new_name(column, cell, model, iter_, data):
+            entry = model.get_value(iter_)
+            cell.set_property("text", entry.new_name or u"")
+        column.set_cell_data_func(render, cell_data_new_name)
+
         column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
         self.view.append_column(column)
 
-        self.preview.connect_object('clicked', self.__preview, None)
+        connect_obj(self.preview, 'clicked', self.__preview, None)
 
-        parent.connect_object('changed', self.__class__.__preview, self)
-        self.save.connect_object('clicked', self.__rename, library)
+        connect_obj(parent, 'changed', self.__class__.__preview, self)
+        connect_obj(self.save, 'clicked', self.__rename, library)
 
         render.connect('edited', self.__row_edited)
 
+        for child in self.get_children():
+            child.show()
+
+    def __filter_preview(self, *args):
+        Gtk.Button.clicked(self.preview)
+
+    def __filter_changed(self, *args):
+        self._changed(self.combo.get_child())
+
+    def _changed(self, entry):
+        self.save.set_sensitive(False)
+        self.preview.set_sensitive(bool(entry.get_text()))
+
     def __row_edited(self, renderer, path, new):
-        row = self.view.get_model()[path]
-        if row[2] != new:
-            row[2] = new
+        path = Gtk.TreePath.new_from_string(path)
+        model = self.view.get_model()
+        entry = model[path][0]
+        new = new.decode("utf-8")
+        if entry.new_name != new:
+            entry.new_name = new
             self.preview.set_sensitive(True)
             self.save.set_sensitive(True)
+            model.path_changed(path)
 
     def __rename(self, library):
         model = self.view.get_model()
@@ -131,12 +223,16 @@ class RenameFiles(EditPane):
         skip_all = False
         self.view.freeze_child_notify()
 
-        rows = [(row[0], row[1], row[2].decode('utf-8')) for row in model]
-        for song, oldname, newname in rows:
+        for entry in model.itervalues():
+            song = entry.song
+            new_name = entry.new_name
+            old_name = entry.name
+            if new_name is None:
+                continue
+
             try:
-                newname = util.fsnative(newname)
-                library.rename(song, newname, changed=was_changed)
-            except StandardError:
+                library.rename(song, fsnative(new_name), changed=was_changed)
+            except Exception:
                 util.print_exc()
                 if skip_all:
                     continue
@@ -146,12 +242,13 @@ class RenameFiles(EditPane):
                            _("_Continue"), Gtk.ResponseType.OK)
                 msg = qltk.Message(
                     Gtk.MessageType.ERROR, win, _("Unable to rename file"),
-                    _("Renaming <b>%s</b> to <b>%s</b> failed. "
-                      "Possibly the target file already exists, "
+                    _("Renaming <b>%(old-name)s</b> to <b>%(new-name)s</b> "
+                      "failed. Possibly the target file already exists, "
                       "or you do not have permission to make the "
-                      "new file or remove the old one.") % (
-                    util.escape(fsdecode(oldname)),
-                    util.escape(fsdecode(newname))),
+                      "new file or remove the old one.") % {
+                        "old-name": util.escape(old_name),
+                        "new-name": util.escape(new_name),
+                      },
                     buttons=Gtk.ButtonsType.NONE)
                 msg.add_buttons(*buttons)
                 msg.set_default_response(Gtk.ResponseType.OK)
@@ -174,11 +271,12 @@ class RenameFiles(EditPane):
     def __preview(self, songs):
         model = self.view.get_model()
         if songs is None:
-            songs = [row[0] for row in model]
-        pattern = self.combo.get_child().get_text().decode("utf-8")
+            songs = [e.song for e in model.itervalues()]
+
+        pattern_text = self.combo.get_child().get_text().decode("utf-8")
 
         try:
-            pattern = FileFromPattern(pattern)
+            pattern = FileFromPattern(pattern_text)
         except ValueError:
             qltk.ErrorMessage(
                 self, _("Path is not absolute"),
@@ -189,23 +287,25 @@ class RenameFiles(EditPane):
                 util.escape(pattern))).run()
             return
         else:
-            if self.combo.get_child().get_text():
-                self.combo.prepend_text(self.combo.get_child().get_text())
+            if pattern:
+                self.combo.prepend_text(pattern_text)
                 self.combo.write(const.NBP)
 
+        # native paths
         orignames = [song["~filename"] for song in songs]
-        newnames = [fsdecode(fsencode(pattern.format(song)))
-                    for song in songs]
-        for f in self.filters:
+        newnames = [pattern.format(song) for song in songs]
+        for f in self.filter_box.filters:
             if f.active:
                 newnames = f.filter_list(orignames, newnames)
 
         model.clear()
         for song, newname in zip(songs, newnames):
-            basename = fsdecode(song("~basename"))
-            model.append(row=[song, basename, newname])
+            entry = Entry(song)
+            entry.new_name = fsdecode(newname)
+            model.append(row=[entry])
+
         self.preview.set_sensitive(False)
-        self.save.set_sensitive(bool(self.combo.get_child().get_text()))
+        self.save.set_sensitive(bool(pattern_text))
         for song in songs:
             if not song.is_file:
                 self.set_sensitive(False)

@@ -126,6 +126,9 @@ class DeviceManager(GObject.GObject):
         the device serial (so it's unique) and maybe the model name."""
         device = None
 
+        print_d("Creating device %r supporting protocols: %r" % (
+            device_id, protocols))
+
         for prots in (protocols, ['storage']):
             klass = get_by_protocols(prots)
             if klass is None:
@@ -143,8 +146,12 @@ class DeviceManager(GObject.GObject):
         return device
 
 
-def get_device_from_path(udev_ctx, path):
-    """A dict of device attributes for the given device path"""
+def get_devices_from_path(udev_ctx, path):
+    """A list of device attribute dicts for the given device path and all its
+    parents.
+
+    Either returns a non empty list or raises EnvironmentError.
+    """
 
     path = path.encode("ascii")
     enum = udev.UdevEnumerate.new(udev_ctx)
@@ -153,12 +160,12 @@ def get_device_from_path(udev_ctx, path):
         raise EnvironmentError
 
     # only match the device we want
-    if enum.add_match_property("DEVNAME", path):
+    if enum.add_match_property("DEVNAME", path) != 0:
         enum.unref()
         raise EnvironmentError
 
     # search for it
-    if enum.scan_devices():
+    if enum.scan_devices() != 0:
         enum.unref()
         raise EnvironmentError
 
@@ -167,27 +174,35 @@ def get_device_from_path(udev_ctx, path):
     if not entry:
         enum.unref()
         raise EnvironmentError
-
-    device = udev.UdevDevice.new_from_syspath(udev_ctx, entry.get_name())
-    if not device:
-        enum.unref()
-        raise EnvironmentError
-
-    entry = device.get_properties_list_entry()
-    if not entry:
-        enum.unref()
-        device.unref()
-        raise EnvironmentError
-
-    attrs = {}
-    for e in entry:
-        name = e.get_name()
-        value = e.get_value()
-        attrs[name] = value.decode("string-escape")
-
+    sys_path = entry.get_name()
     enum.unref()
-    device.unref()
-    return attrs
+
+    device = udev.UdevDevice.new_from_syspath(udev_ctx, sys_path)
+    if not device:
+        raise EnvironmentError
+
+    devices = []
+    while device:
+        devices.append(device)
+        device = device.get_parent()
+
+    device_attrs = []
+    for device in devices:
+        entry = device.get_properties_list_entry()
+        if not entry:
+            continue
+
+        attrs = {}
+        for e in entry:
+            name = e.get_name()
+            value = e.get_value()
+            attrs[name] = value.decode("string-escape")
+        device_attrs.append(attrs)
+
+    # the first device owns its parents
+    devices[0].unref()
+
+    return device_attrs
 
 
 def dbus_barray_to_str(array):
@@ -211,14 +226,14 @@ class UDisks2Manager(DeviceManager):
         try:
             udev.init()
         except OSError:
-            print_w(_("%s: Could not find 'libudev'.") % "UDisks2")
+            print_w("UDisks2: " + _("Could not find '%s'.") % "libudev")
             error = True
         else:
             self._udev = udev.Udev.new()
 
         if get_mpi_dir() is None:
-            print_w(_("%s: Could not find %s.")
-                    % ("UDisks2", "media-player-info"))
+            print_w("UDisks2: " + _("Could not find '%s'.")
+                    % "media-player-info")
             error = True
 
         if error:
@@ -246,20 +261,23 @@ class UDisks2Manager(DeviceManager):
         None if it wasn't a media player etc..
         """
 
+        drive = self._drives.get(block["Drive"])
+        if not drive:
+            # I think this shouldn't happen, but check anyway
+            return
+
         dev_path = dbus_barray_to_str(block["Device"])
+        print_d("Found device: %r" % dev_path)
 
         media_player_id = get_media_player_id(self._udev, dev_path)
         if not media_player_id:
+            print_d("%r not a media player" % dev_path)
             return
         protocols = get_media_player_protocols(media_player_id)
 
-        drive = self._drives.get(block["Drive"])
-        if not drive:
-            return
-
         device_id = drive["Id"]
 
-        dev = self.create_device(object_path, device_id, protocols)
+        dev = self.create_device(object_path, unicode(device_id), protocols)
         icon_name = block["HintIconName"]
         if icon_name:
             dev.icon = icon_name
@@ -268,7 +286,8 @@ class UDisks2Manager(DeviceManager):
     def discover(self):
         objects = self._interface.GetManagedObjects()
         for object_path, interfaces_and_properties in objects.iteritems():
-            self._interface_added(object_path, interfaces_and_properties)
+            self._update_interfaces(object_path, interfaces_and_properties)
+        self._check_interfaces()
 
     def get_name(self, path):
         block = self._blocks[path]
@@ -315,7 +334,7 @@ class UDisks2Manager(DeviceManager):
             return False
         return True
 
-    def _interface_added(self, object_path, iap):
+    def _update_interfaces(self, object_path, iap):
         if self.DRIVE_IFACE in iap:
             self._drives[object_path] = iap[self.DRIVE_IFACE]
         if self.FS_IFACE in iap:
@@ -323,12 +342,12 @@ class UDisks2Manager(DeviceManager):
         if self.BLOCK_IFACE in iap:
             self._blocks[object_path] = iap[self.BLOCK_IFACE]
 
-        # we are finished with this one, ignore
-        if object_path in self._devices:
-            return
-
+    def _check_interfaces(self):
         # we need the block and fs interface to create a device
-        if object_path in self._fs and object_path in self._blocks:
+        for object_path in (set(self._fs.keys()) & set(self._blocks.keys())):
+            # we are finished with this one, ignore
+            if object_path in self._devices:
+                continue
             block = self._blocks[object_path]
             fs = self._fs[object_path]
             dev = self._try_build_device(object_path, block, fs)
@@ -336,11 +355,15 @@ class UDisks2Manager(DeviceManager):
                 self._devices[object_path] = dev
                 self.emit("added", dev)
 
+    def _interface_added(self, object_path, iap):
+        self._update_interfaces(object_path, iap)
+        self._check_interfaces()
+
     def _interface_removed(self, object_path, interfaces):
         if self.FS_IFACE in interfaces or self.BLOCK_IFACE in interfaces:
             # if any of our needed interfaces goes away, remove the device
             if object_path in self._devices:
-                self.emit("removed", object_path)
+                self.emit("removed", unicode(object_path))
                 dev = self._devices[object_path]
                 dev.close()
                 del self._devices[object_path]
@@ -360,16 +383,17 @@ def get_media_player_id(udev_ctx, dev_path):
     """
 
     try:
-        dev = get_device_from_path(udev_ctx, dev_path)
+        devs = get_devices_from_path(udev_ctx, dev_path)
     except Exception:
         print_w("Failed to retrieve udev properties for %r" % dev_path)
         util.print_exc()
         return
 
-    try:
-        return dev["ID_MEDIA_PLAYER"]
-    except KeyError:
-        return
+    for dev in devs:
+        try:
+            return dev["ID_MEDIA_PLAYER"]
+        except KeyError:
+            continue
 
 
 def get_mpi_dir():
@@ -415,14 +439,14 @@ class UDisks1Manager(DeviceManager):
         try:
             udev.init()
         except OSError:
-            print_w(_("%s: Could not find 'libudev'.") % "UDisks")
+            print_w("UDisks: " + _("Could not find '%s'.") % "libudev")
             error = True
         else:
             self.__udev = udev.Udev.new()
 
         if get_mpi_dir() is None:
-            print_w(_("%s: Could not find %s.")
-                    % ("UDisks", "media-player-info"))
+            print_w("UDisks: " + _("Could not find '%s'.")
+                    % "media-player-info")
             error = True
 
         if error:

@@ -11,18 +11,19 @@ from gi.repository import Gtk, GLib, Pango, Gdk
 from tempfile import NamedTemporaryFile
 from quodlibet.plugins.playlist import PLAYLIST_HANDLER
 
-from util import *
-
 from quodlibet import config
 from quodlibet import const
 from quodlibet import qltk
-from quodlibet import util
 from quodlibet.browsers._base import Browser
 from quodlibet.formats._audio import AudioFile
 from quodlibet.util.collection import Playlist
+from quodlibet.util import connect_obj
 from quodlibet.qltk.songsmenu import SongsMenu
 from quodlibet.qltk.views import RCMHintedTreeView
-from quodlibet.qltk.x import ScrolledWindow, Alignment
+from quodlibet.qltk.models import ObjectStore, ObjectModelSort
+from quodlibet.qltk.x import ScrolledWindow, Align
+
+from .util import *
 
 
 DND_QL, DND_URI_LIST, DND_MOZ_URL = range(3)
@@ -37,7 +38,8 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
     replaygain_profiles = ["track"]
 
     def pack(self, songpane):
-        container = qltk.RHPaned()
+        container = qltk.ConfigRHPaned(
+            "browsers", "playlistsbrowser_pos", 0.4)
         self.show()
         container.pack1(self, True, False)
         container.pack2(songpane, True, False)
@@ -50,7 +52,7 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
     @classmethod
     def init(klass, library):
         model = klass.__lists.get_model()
-        for playlist in os.listdir(util.fsnative(PLAYLISTS)):
+        for playlist in os.listdir(PLAYLISTS):
             try:
                 playlist = Playlist(PLAYLISTS, Playlist.unquote(playlist),
                                     library=library)
@@ -104,23 +106,28 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
         render.markup = model[iter][0].format()
         render.set_property('markup', render.markup)
 
-    def Menu(self, songs, songlist, library):
-        menu = super(PlaylistsBrowser, self).Menu(songs, songlist, library)
-        model, rows = songlist.get_selection().get_selected_rows()
-        iters = map(model.get_iter, rows)
-        i = qltk.MenuItem(_("_Remove from Playlist"), Gtk.STOCK_REMOVE)
-        i.connect_object('activate', self.__remove, iters, model)
-        i.set_sensitive(bool(self.__view.get_selection().get_selected()[1]))
-        menu.preseparate()
-        menu.prepend(i)
+    def Menu(self, songs, library, items):
+        songlist = qltk.get_top_parent(self).songlist
+        model, iters = self.__get_selected_songs(songlist)
+        item = qltk.MenuItem(_("_Remove from Playlist"), Gtk.STOCK_REMOVE)
+        qltk.add_fake_accel(item, "Delete")
+        connect_obj(item, 'activate', self.__remove, iters, model)
+        item.set_sensitive(bool(self.__view.get_selection().get_selected()[1]))
+
+        items.append([item])
+        menu = super(PlaylistsBrowser, self).Menu(songs, library, items)
         return menu
 
-    __lists = Gtk.TreeModelSort(model=Gtk.ListStore(object))
+    def __get_selected_songs(self, songlist):
+        model, rows = songlist.get_selection().get_selected_rows()
+        iters = map(model.get_iter, rows)
+        return model, iters
+
+    __lists = ObjectModelSort(model=ObjectStore())
     __lists.set_default_sort_func(lambda m, a, b, data: cmp(m[a][0], m[b][0]))
 
-    def __init__(self, library, main):
+    def __init__(self, library):
         super(PlaylistsBrowser, self).__init__(spacing=6)
-        self.__main = main
         self.__view = view = RCMHintedTreeView()
         self.__view.set_enable_search(True)
         self.__view.set_search_column(0)
@@ -152,7 +159,7 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
         hb.set_homogeneous(True)
         hb.pack_start(newpl, True, True, 0)
         hb.pack_start(importpl, True, True, 0)
-        self.pack_start(Alignment(hb, left=3, bottom=3), False, True, 0)
+        self.pack_start(Align(hb, left=3, bottom=3), False, True, 0)
 
         view.connect('popup-menu', self.__popup_menu, library)
 
@@ -171,19 +178,29 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
         view.connect('drag-data-get', self.__drag_data_get)
         view.connect('drag-motion', self.__drag_motion)
         view.connect('drag-leave', self.__drag_leave)
-        if main:
-            view.connect('row-activated', lambda *x: self.emit("activated"))
-        else:
-            render.set_property('editable', True)
+
+        view.connect('row-activated', lambda *x: self.songs_activated())
+
         view.get_selection().connect('changed', self.activate)
 
         s = view.get_model().connect('row-changed', self.__check_current)
-        self.connect_object('destroy', view.get_model().disconnect, s)
+        connect_obj(self, 'destroy', view.get_model().disconnect, s)
 
         self.connect('key-press-event', self.__key_pressed)
 
         for child in self.get_children():
             child.show_all()
+
+    def key_pressed(self, event):
+        if qltk.is_accel(event, "Delete"):
+            self.__handle_songlist_delete()
+            return True
+        return False
+
+    def __handle_songlist_delete(self, *args):
+        songlist = qltk.get_top_parent(self).songlist
+        model, iters = self.__get_selected_songs(songlist)
+        self.__remove(iters, model)
 
     def __key_pressed(self, widget, event):
         if qltk.is_accel(event, "Delete"):
@@ -233,6 +250,8 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
             for iter_remove in iters:
                 smodel.remove(iter_remove)
             playlist = model[iter][0]
+            # Calling playlist.remove_songs(songs) won't remove the right ones
+            # if there are duplicates
             playlist.clear()
             playlist.extend([row[0] for row in smodel])
             PlaylistsBrowser.changed(playlist)
@@ -318,7 +337,8 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
         songs = list(model[itr][0])
         songs = filter(lambda s: isinstance(s, AudioFile), songs)
         menu = SongsMenu(library, songs,
-                         playlists=False, remove=False, parent=self)
+                         playlists=False, remove=False,
+                         ratings=False)
         menu.preseparate()
 
         def _remove(model, itr):
@@ -330,7 +350,7 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
                     model.convert_iter_to_child_iter(itr))
 
         rem = Gtk.ImageMenuItem(Gtk.STOCK_DELETE, use_stock=True)
-        rem.connect_object('activate', _remove, model, itr)
+        connect_obj(rem, 'activate', _remove, model, itr)
         menu.prepend(rem)
 
         def _rename(path):
@@ -339,7 +359,7 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
 
         ren = qltk.MenuItem(_("_Rename"), Gtk.STOCK_EDIT)
         qltk.add_fake_accel(ren, "F2")
-        ren.connect_object('activate', _rename, model.get_path(itr))
+        connect_obj(ren, 'activate', _rename, model.get_path(itr))
         menu.prepend(ren)
 
         playlist = model[itr][0]
@@ -351,7 +371,7 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
         model, iter = self.__view.get_selection().get_selected()
         songs = iter and list(model[iter][0]) or []
         songs = filter(lambda s: isinstance(s, AudioFile), songs)
-        self.emit('songs-selected', songs, resort)
+        self.songs_selected(songs, resort)
 
     def save(self):
         model, iter = self.__view.get_selection().get_selected()
@@ -375,7 +395,6 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
         else:
             row = self.__lists[path]
             self.__lists.row_changed(row.path, row.iter)
-        render.set_property('editable', not self.__main)
 
     def __import(self, activator, library):
         filt = lambda fn: fn.endswith(".pls") or fn.endswith(".m3u")
@@ -405,8 +424,9 @@ class PlaylistsBrowser(Gtk.VBox, Browser):
             return
         self.__view.select_by_func(lambda r: r[0].name == name, one=True)
 
-    def reordered(self, songlist):
-        songs = songlist.get_songs()
+    can_reorder = True
+
+    def reordered(self, songs):
         model, iter = self.__view.get_selection().get_selected()
         playlist = None
         if iter:

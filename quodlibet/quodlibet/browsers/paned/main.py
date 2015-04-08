@@ -16,12 +16,13 @@ from quodlibet import util
 
 from quodlibet.browsers._base import Browser
 from quodlibet.formats import PEOPLE
-from quodlibet.parse import Query
+from quodlibet.query import Query
 from quodlibet.qltk.songlist import SongList
 from quodlibet.qltk.completion import LibraryTagCompletion
 from quodlibet.qltk.searchbar import SearchBarBox
-from quodlibet.qltk.x import ScrolledWindow, Alignment, RPaned
+from quodlibet.qltk.x import ScrolledWindow, Align
 from quodlibet.util.library import background_filter
+from quodlibet.util import connect_destroy
 
 from .prefs import PreferencesButton
 from .util import get_headers
@@ -62,15 +63,12 @@ class PanedBrowser(Gtk.VBox, Browser, util.InstanceTracker):
             browser.refresh_panes()
             browser.fill_panes()
 
-    def __init__(self, library, main):
+    def __init__(self, library):
         super(PanedBrowser, self).__init__()
         self._register_instance()
 
-        self.__main = main
-
         self._filter = None
         self._library = library
-        self.commands = {"query": self.__query}
 
         self.set_spacing(6)
 
@@ -82,32 +80,26 @@ class PanedBrowser(Gtk.VBox, Browser, util.InstanceTracker):
         sbb.connect('focus-out', self.__focus)
         self._sb_box = sbb
 
-        align = (Alignment(sbb, left=6, right=6, top=6) if main
-                 else Alignment(sbb))
+        align = Align(sbb, left=6, right=6, top=6)
         self.pack_start(align, False, True, 0)
 
         keyval, mod = Gtk.accelerator_parse("<control>Home")
-        s = self.accelerators.connect(keyval, mod, 0, self.__select_all)
-        self.connect_object('destroy',
-                            self.accelerators.disconnect_key, keyval, mod)
+        self.accelerators.connect(keyval, mod, 0, self.__select_all)
         select = Gtk.Button(label=_("Select _All"), use_underline=True)
-        s = select.connect('clicked', self.__select_all)
-        self.connect_object('destroy', select.disconnect, s)
+        select.connect('clicked', self.__select_all)
         sbb.pack_start(select, False, True, 0)
 
         prefs = PreferencesButton(self)
         sbb.pack_start(prefs, False, True, 0)
 
-        for s in [library.connect('changed', self.__changed),
-                  library.connect('added', self.__added),
-                  library.connect('removed', self.__removed)
-                  ]:
-            self.connect_object('destroy', library.disconnect, s)
+        connect_destroy(library, 'changed', self.__changed)
+        connect_destroy(library, 'added', self.__added)
+        connect_destroy(library, 'removed', self.__removed)
 
         self.connect('destroy', self.__destroy)
 
         # contains the panes and the song list
-        self.main_box = RPaned()
+        self.main_box = qltk.ConfigRPaned("browsers", "panedbrowser_pos", 0.4)
         self.pack_start(self.main_box, True, True, 0)
 
         self.refresh_panes()
@@ -116,7 +108,6 @@ class PanedBrowser(Gtk.VBox, Browser, util.InstanceTracker):
             child.show_all()
 
     def __destroy(self, *args):
-        del self.commands
         del self._sb_box
 
     def set_wide_mode(self, do_wide):
@@ -136,9 +127,6 @@ class PanedBrowser(Gtk.VBox, Browser, util.InstanceTracker):
 
     def _set_text(self, text):
         self._sb_box.set_text(text)
-
-    def __query(self, text, library, window, player):
-        self.filter_text(text)
 
     def __focus(self, widget, *args):
         qltk.get_top_parent(widget).songlist.grab_focus()
@@ -217,9 +205,8 @@ class PanedBrowser(Gtk.VBox, Browser, util.InstanceTracker):
         self._panes.pop()  # remove self
 
         for pane in self._panes:
-            if self.__main:
-                pane.connect('row-activated',
-                             lambda *x: self.emit("activated"))
+            pane.connect('row-activated',
+                         lambda *x: self.songs_activated())
             sw = ScrolledWindow()
             sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
             sw.set_shadow_type(Gtk.ShadowType.IN)
@@ -323,4 +310,4 @@ class PanedBrowser(Gtk.VBox, Browser, util.InstanceTracker):
             self.fill_panes()
 
     def fill(self, songs):
-        GLib.idle_add(self.emit, 'songs-selected', list(songs), None)
+        GLib.idle_add(self.songs_selected, list(songs))

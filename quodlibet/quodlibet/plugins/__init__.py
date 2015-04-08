@@ -45,8 +45,9 @@ class PluginImportException(Exception):
 class PluginNotSupportedError(PluginImportException):
     """To hide the plugin (e.g. on Windows)"""
 
-    def __init__(self):
-        super(PluginNotSupportedError, self).__init__("not supported")
+    def __init__(self, msg=None):
+        msg = "not supported: %s" % (msg or "unknown reason")
+        super(PluginNotSupportedError, self).__init__(msg)
 
     def should_show(self):
         return False
@@ -55,8 +56,8 @@ class PluginNotSupportedError(PluginImportException):
 class MissingModulePluginException(PluginImportException):
     """Consistent Exception for reporting missing modules for plugins"""
     def __init__(self, module_name):
-        msg = _("Couldn't find module '{module}'. Perhaps you need to "
-                "install the package?".format(module=module_name))
+        msg = (_("Couldn't find module '{module}'. Perhaps you need to "
+                 "install the package?").format(module=module_name))
         super(MissingModulePluginException, self).__init__(msg)
 
 
@@ -64,8 +65,8 @@ class MissingGstreamerElementPluginException(PluginImportException):
     """Consistent Exception for reporting missing Gstreamer elements for
     plugins"""
     def __init__(self, element_name):
-        msg = _("Couldn't find GStreamer element '{element}'."
-                .format(element=element_name))
+        msg = (_("Couldn't find GStreamer element '{element}'.")
+                 .format(element=element_name))
         super(MissingGstreamerElementPluginException, self).__init__(msg)
 
 

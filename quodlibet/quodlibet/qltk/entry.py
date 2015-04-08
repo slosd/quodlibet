@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig, Michael Urman
 #           2011, 2012 Christoph Reiter
 #
@@ -5,10 +6,13 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
-from gi.repository import Gtk, GObject, Gdk, Gio
+import math
+
+from gi.repository import Gtk, GObject, Gdk, Gio, Pango
 
 from quodlibet.qltk import is_accel, add_fake_accel
 from quodlibet.qltk.x import SeparatorMenuItem
+from quodlibet.query import Query, QueryType
 
 
 class EditableUndo(object):
@@ -145,10 +149,44 @@ class EditableUndo(object):
 
 
 class Entry(Gtk.Entry):
+
+    def __init__(self, *args, **kwargs):
+        super(Entry, self).__init__(*args, **kwargs)
+        self._max_width_chars = -1
+
+        # the default is way too much
+        self.set_width_chars(5)
+
+    def set_max_width_chars(self, value):
+        """Works with GTK+ <3.12"""
+
+        self._max_width_chars = value
+        self.queue_resize()
+
     def do_get_preferred_width(self):
-        # 150 min width since GTK+3.2 is way too much
         minimum, natural = Gtk.Entry.do_get_preferred_width(self)
-        return (30, natural)
+
+        if self._max_width_chars >= 0:
+            # based on gtkentry.c
+            style_context = self.get_style_context()
+            border = style_context.get_border(Gtk.StateFlags.NORMAL)
+            padding = style_context.get_padding(Gtk.StateFlags.NORMAL)
+            pango_context = self.get_pango_context()
+
+            metrics = pango_context.get_metrics(
+                pango_context.get_font_description(),
+                pango_context.get_language())
+
+            char_width = metrics.get_approximate_char_width()
+            digit_width = metrics.get_approximate_digit_width()
+            char_pixels = int(math.ceil(
+                float(max(char_width, digit_width)) / Pango.SCALE))
+
+            space = border.left + border.right + padding.left + padding.right
+            nat_width = self._max_width_chars * char_pixels + space
+            natural = max(nat_width, minimum)
+
+        return (minimum, natural)
 
 
 class UndoEntry(Entry, EditableUndo):
@@ -194,26 +232,22 @@ class ValidatingEntryMixin(object):
     """An entry with visual feedback as to whether it is valid or not.
     The given validator function gets a string and returns True (green),
     False (red), or None (black).
-
-    parse.Query.is_valid_color mimicks the behavior of the search bar.
-
-    If the "Color search terms" option is off, the entry will not
-    change color."""
+    """
 
     INVALID = Gdk.RGBA(0.8, 0, 0)
     VALID = Gdk.RGBA(0.3, 0.6, 0.023)
 
     def set_validate(self, validator=None):
         if validator:
-            self.connect_object('changed', self.__color, validator)
+            self.connect('changed', self.__color, validator)
 
-    def __color(self, validator):
-        value = validator(self.get_text())
+    def __color(self, widget, validator):
+        value = validator(self.get_text().decode("utf-8"))
         if value is True:
             color = self.VALID
         elif value is False:
             color = self.INVALID
-        elif value and isinstance(value, str):
+        elif value and isinstance(value, basestring):
             color = Gdk.RGBA()
             color.parse(value)
         else:
@@ -223,6 +257,20 @@ class ValidatingEntryMixin(object):
             self.override_color(Gtk.StateType.NORMAL, color)
         else:
             self.override_color(Gtk.StateType.NORMAL, None)
+
+
+def QueryValidator(string):
+    """Returns True/False for a query, None for a text only query"""
+
+    type_ = Query.get_type(string)
+    if type_ == QueryType.VALID:
+        # in case of an empty but valid query we say it's "text"
+        if Query.match_all(string):
+            return None
+        return True
+    elif type_ == QueryType.INVALID:
+        return False
+    return None
 
 
 class ValidatingEntry(ClearEntry, ValidatingEntryMixin):

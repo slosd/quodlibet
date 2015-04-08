@@ -6,15 +6,13 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
+import os
 import time
 
-from gi.repository import Gdk, GObject, GLib
+from gi.repository import GObject, GLib
 
-import quodlibet
-from quodlibet import const
 from quodlibet import config
-from quodlibet.qltk.msg import ErrorMessage
-from quodlibet.util.string import decode
+from quodlibet import const
 
 
 class TimeTracker(GObject.GObject):
@@ -69,15 +67,27 @@ class TimeTracker(GObject.GObject):
 
 
 class SongTracker(object):
+
     def __init__(self, librarian, player, pl):
-        player.connect('song-ended', self.__end, librarian, pl)
-        player.connect('song-started', self.__start, librarian)
+        self.__player_ids = [
+            player.connect('song-ended', self.__end, librarian, pl),
+            player.connect('song-started', self.__start, librarian),
+        ]
+        self.__player = player
         timer = TimeTracker(player)
         timer.connect("tick", self.__timer)
         self.elapsed = 0
         self.__to_change = set()
         self.__change_id = None
-        quodlibet.quit_add(1, self.__quit, librarian, player)
+
+    def destroy(self):
+        for id_ in self.__player_ids:
+            self.__player.disconnect(id_)
+        self.__player = None
+
+        if self.__change_id:
+            GLib.source_remove(self.__change_id)
+            self.__change_id = None
 
     def __changed(self, librarian, song):
         # try to combine changed events and process them if QL is idle
@@ -109,21 +119,58 @@ class SongTracker(object):
             config.set("memory", "song", "")
 
     def __end(self, player, song, ended, librarian, pl):
-        if song is None or song.multisong:
-            return
-        elif self.elapsed > 0.5 * song.get("~#length", 1):
-            song["~#lastplayed"] = int(time.time())
-            song["~#playcount"] = song.get("~#playcount", 0) + 1
-            self.__changed(librarian, song)
-        elif pl.current is not song:
-            if not player.error:
-                song["~#skipcount"] = song.get("~#skipcount", 0) + 1
-                self.__changed(librarian, song)
+        if song is not None and not song.multisong:
+            if ended:
+                config.set("memory", "seek", player.get_position())
+            else:
+                config.set("memory", "seek", 0)
 
-    def __quit(self, librarian, player):
-        config.set("memory", "seek", player.get_position())
-        player.emit('song-ended', player.song, True)
-        return 0
+            if self.elapsed > 0.5 * song.get("~#length", 1):
+                song["~#lastplayed"] = int(time.time())
+                song["~#playcount"] = song.get("~#playcount", 0) + 1
+                self.__changed(librarian, song)
+            elif pl.current is not song:
+                if not player.error:
+                    song["~#skipcount"] = song.get("~#skipcount", 0) + 1
+                    self.__changed(librarian, song)
+        else:
+            config.set("memory", "seek", 0)
 
     def __timer(self, timer):
         self.elapsed += 1
+
+
+class FSInterface(object):
+    """Provides a file in ~/.quodlibet to indicate what song is playing."""
+
+    def __init__(self, player):
+        self._player = player
+        self._ids = [
+            player.connect('song-started', self.__started),
+            player.connect('song-ended', self.__ended),
+        ]
+
+    def destroy(self):
+        for id_ in self._ids:
+            self._player.disconnect(id_)
+
+        try:
+            os.unlink(const.CURRENT)
+        except EnvironmentError:
+            pass
+
+    def __started(self, player, song):
+        if song:
+            try:
+                f = file(const.CURRENT, "w")
+            except EnvironmentError:
+                pass
+            else:
+                f.write(song.to_dump())
+                f.close()
+
+    def __ended(self, player, song, stopped):
+        try:
+            os.unlink(const.CURRENT)
+        except EnvironmentError:
+            pass

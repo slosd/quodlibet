@@ -1,59 +1,28 @@
 #!/usr/bin/env python2
+# -*- coding: utf-8 -*-
 
 import sys
 import os
-
-if sys.version_info[0] != 2:
-    try:
-        os.execvp("python2", ["python"] + sys.argv)
-    except OSError:
-        pass
-
 import shutil
 import subprocess
+import tarfile
 
 # disable translations
 os.environ["QUODLIBET_NO_TRANS"] = ""
 
 from distutils.core import setup, Command
 from distutils.dep_util import newer
+from distutils import dir_util
 from distutils.command.build_scripts import build_scripts as du_build_scripts
 
 from gdist import GDistribution
-from gdist.clean import clean as gdist_clean
-from distutils.command.sdist import sdist as distutils_sdist
+from gdist.clean import clean
+from distutils.command.sdist import sdist
 
 
 # TODO: link this better to the app definitions
 MIN_PYTHON_VER = (2, 6)
 MIN_PYTHON_VER_STR = ".".join(map(str, MIN_PYTHON_VER))
-
-
-class clean(gdist_clean):
-    def run(self):
-        gdist_clean.run(self)
-
-        if not self.all:
-            return
-
-        def should_remove(filename):
-            if (filename.lower()[-4:] in [".pyc", ".pyo"] or
-                    filename.endswith("~") or
-                    (filename.startswith("#") and filename.endswith("#"))):
-                return True
-            else:
-                return False
-        for pathname, dirs, files in os.walk(os.path.dirname(__file__)):
-            for filename in filter(should_remove, files):
-                try:
-                    os.unlink(os.path.join(pathname, filename))
-                except EnvironmentError as err:
-                    print(str(err))
-
-        for base in ["coverage", "build", "dist"]:
-            path = os.path.join(os.path.dirname(__file__), base)
-            if os.path.isdir(path):
-                shutil.rmtree(path)
 
 
 class build_sphinx(Command):
@@ -154,15 +123,19 @@ class quality_cmd(Command):
         cmd.run()
 
 
-class sdist(distutils_sdist):
+class distcheck(sdist):
+    description = "run tests on a fresh sdist"
 
     def _check_manifest(self):
+        assert self.get_archive_files()
+
         # make sure MANIFEST.in includes all tracked files
         if subprocess.call(["hg", "status"],
                            stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE) == 0:
             # contains the packaged files after run() is finished
             included_files = self.filelist.files
+            assert included_files
 
             process = subprocess.Popen(["hg", "locate"],
                                        stdout=subprocess.PIPE)
@@ -183,16 +156,37 @@ class sdist(distutils_sdist):
                       "tracked files or includes non-tracked files")
                 for path in sorted(diff):
                     print(path)
+                raise AssertionError
+
+    def _check_dist(self):
+        assert self.get_archive_files()
+
+        distcheck_dir = os.path.join(self.dist_dir, "distcheck")
+        if os.path.exists(distcheck_dir):
+            dir_util.remove_tree(distcheck_dir)
+        self.mkpath(distcheck_dir)
+
+        archive = self.get_archive_files()[0]
+        tfile = tarfile.open(archive, "r:gz")
+        tfile.extractall(distcheck_dir)
+        tfile.close()
+
+        name = self.distribution.get_fullname()
+        extract_dir = os.path.join(distcheck_dir, name)
+
+        old_pwd = os.getcwd()
+        os.chdir(extract_dir)
+        self.spawn([sys.executable, "setup.py", "test"])
+        self.spawn([sys.executable, "setup.py", "build"])
+        self.spawn([sys.executable, "setup.py", "build_sphinx"])
+        self.spawn([sys.executable, "setup.py", "install",
+                    "--prefix", "../prefix", "--record", "../log.txt"])
+        os.chdir(old_pwd)
 
     def run(self):
-        result = distutils_sdist.run(self)
-
-        try:
-            self._check_manifest()
-        except EnvironmentError:
-            pass
-
-        return result
+        sdist.run(self)
+        self._check_manifest()
+        self._check_dist()
 
 
 class build_scripts(du_build_scripts):
@@ -249,7 +243,7 @@ class coverage_cmd(Command):
         cov.html_report(
             directory=dest,
             ignore_errors=True,
-            include=["quodlibet*"])
+            include=["quodlibet*", "operon*"])
 
         print("Coverage summary: file://%s/index.html" % dest)
 
@@ -297,7 +291,7 @@ if __name__ == "__main__":
 
     cmd_classes = {
         'clean': clean,
-        "sdist": sdist,
+        "distcheck": distcheck,
         "test": test_cmd,
         "quality": quality_cmd,
         "coverage": coverage_cmd,
@@ -307,14 +301,14 @@ if __name__ == "__main__":
 
     package_path = quodlibet.__path__[0]
     package_data_paths = recursive_include(
-        package_path, "images", ("svg", "png", "theme"))
+        package_path, "images", ("svg", "png"))
 
     setup_kwargs = {
         'distclass': GDistribution,
         'cmdclass': cmd_classes,
         'name': "quodlibet",
         'version': const.VERSION,
-        'url': "http://code.google.com/p/quodlibet/",
+        'url': "https://quodlibet.readthedocs.org",
         'description': "a music library, tagger, and player",
         'author': "Joe Wreschnig, Michael Urman, & others",
         'author_email': "quod-libet-development@googlegroups.com",
@@ -328,7 +322,7 @@ if __name__ == "__main__":
         'shortcuts': ["data/quodlibet.desktop", "data/exfalso.desktop"],
         'dbus_services': [
             "data/net.sacredchao.QuodLibet.service",
-            # http://code.google.com/p/quodlibet/issues/detail?id=1268
+            # https://github.com/quodlibet/quodlibet/issues/1268
             #"data/org.mpris.MediaPlayer2.quodlibet.service",
             #"data/org.mpris.quodlibet.service",
         ],
@@ -373,54 +367,56 @@ if __name__ == "__main__":
             pass
 
         data_files = [('', ['COPYING'])] + recursive_include_py2exe(
-            "quodlibet", "images", ("svg", "png", "cache", "theme"))
+            "quodlibet", "images", ("svg", "png"))
 
         # py2exe trips over -1 when trying to write version info in the exe
         if setup_kwargs["version"].endswith(".-1"):
             setup_kwargs["version"] = setup_kwargs["version"][:-3]
 
+        CMD_SUFFIX = "-cmd"
+        GUI_TOOLS = ["quodlibet", "exfalso"]
+
+        for gui_name in GUI_TOOLS:
+            setup_kwargs.setdefault("windows", []).append({
+                "script": "%s.py" % gui_name,
+                "icon_resources": [(1,
+                   os.path.join('..', 'win_installer', 'misc',
+                                '%s.ico' % gui_name))],
+            })
+
+            # add a cmd version that supports stdout but opens a console
+            setup_kwargs.setdefault("console", []).append({
+                "script": "%s%s.py" % (gui_name, CMD_SUFFIX),
+                "icon_resources": [(1,
+                   os.path.join('..', 'win_installer', 'misc',
+                                '%s.ico' % gui_name))],
+            })
+            setup_kwargs["scripts"].append("%s%s.py" % (gui_name, CMD_SUFFIX))
+
+        for cli_name in ["operon"]:
+            setup_kwargs.setdefault("console", []).append({
+                "script": "%s.py" % cli_name,
+            })
+
         setup_kwargs.update({
             'data_files': data_files,
-            'windows': [
-                {
-                    "script": "quodlibet.py",
-                    "icon_resources": [(0,
-                       os.path.join('..', 'win_installer', 'misc',
-                                    'quodlibet.ico'))]
-                },
-                # workaround icon not working under Vista/7
-                # exe resource identifiers get incremented and start at 0.
-                # and 0 doesn't seem to be valid.
-                {
-                    "script": "quodlibet.py",
-                    "icon_resources": [(0,
-                       os.path.join('..', 'win_installer', 'misc',
-                                    'quodlibet.ico'))]
-                },
-                {
-                    "script": "exfalso.py",
-                    "icon_resources": [(0,
-                        os.path.join('..', 'win_installer', 'misc',
-                                     'exfalso.ico'))]
-                },
-            ],
-            'console': [
-                {
-                    "script": "operon.py",
-                    "icon_resources": [(0,
-                        os.path.join('..', 'win_installer', 'misc',
-                                     'quodlibet.ico'))]
-                },
-            ],
             'options': {
                 'py2exe': {
                     'packages': ('encodings, feedparser, quodlibet, '
                                  'HTMLParser, cairo, musicbrainz2, shelve, '
                                  'json, gi'),
                     'skip_archive': True,
-                    'dist_dir': os.path.join('dist', 'bin')
+                    'dist_dir': os.path.join('dist', 'bin'),
                 }
             }
         })
 
-    setup(**setup_kwargs)
+        for name in GUI_TOOLS:
+            shutil.copy("%s.py" % name, "%s%s.py" % (name, CMD_SUFFIX))
+        try:
+            setup(**setup_kwargs)
+        finally:
+            for name in GUI_TOOLS:
+                os.unlink("%s%s.py" % (name, CMD_SUFFIX))
+    else:
+        setup(**setup_kwargs)

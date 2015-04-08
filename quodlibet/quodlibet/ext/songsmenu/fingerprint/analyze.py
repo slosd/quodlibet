@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2011,2013,2014 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -7,6 +8,8 @@
 import multiprocessing
 
 from gi.repository import Gst, GObject
+
+from quodlibet.util import connect_obj
 
 
 class FingerPrintResult(object):
@@ -28,7 +31,7 @@ class FingerPrintPipeline(object):
     def _finish(self, result, error):
         song = self._song
         callback = self._callback
-        self.stop()
+        self._reset()
         callback(self, song, result, error)
 
     def _setup_pipe(self):
@@ -50,29 +53,15 @@ class FingerPrintPipeline(object):
         pipe.add(resample)
         Gst.Element.link(convert, resample)
 
-        # ffdec_mp3 got disabled in gstreamer
-        # (for a reason they don't remember), reenable it..
-        # http://cgit.freedesktop.org/gstreamer/gst-ffmpeg/commit/
-        # ?id=2de5aaf22d6762450857d644e815d858bc0cce65
-        ffdec_mp3 = Gst.ElementFactory.find("ffdec_mp3")
-        if ffdec_mp3:
-            ffdec_mp3.set_rank(Gst.Rank.MARGINAL)
-
         def new_decoded_pad(convert, pad, *args):
             pad.link(convert.get_static_pad("sink"))
 
         # decodebin creates pad, we link it
-        decode.connect_object("pad-added", new_decoded_pad, convert)
+        self._dec = decode
+        self._dec_id = connect_obj(decode,
+            "pad-added", new_decoded_pad, convert)
 
         def sort_decoders(decode, pad, caps, factories):
-            # mad is the default decoder with GST_RANK_SECONDARY
-            # flump3dec also is GST_RANK_SECONDARY, is slower than mad,
-            # but wins because of its name, ffdec_mp3 is faster but had some
-            # stability problems (which all seem resolved by now and we call
-            # this >= 0.10.31 anyway). Finally there is mpg123
-            # (http://gst.homeunix.net/) which is even faster but not in the
-            # GStreamer core (FIXME: re-evaluate if it gets merged)
-            #
             # Example (atom CPU) 248 sec song:
             #   mpg123: 3.5s / ffdec_mp3: 5.5s / mad: 7.2s / flump3dec: 13.3s
 
@@ -80,14 +69,16 @@ class FingerPrintPipeline(object):
                 i, f = x
                 i = {
                     "mad": -1,
-                    "ffdec_mp3": -2,
-                    "mpg123audiodec": -3
+                    "avdec_mp3": -2,
+                    "avdec_mp3float": -3,
+                    "mpegaudioparse": -4,
+                    "mpg123audiodec": -5,
                 }.get(f.get_name(), i)
                 return (i, f)
 
             return zip(*sorted(map(set_prio, enumerate(factories))))[1]
 
-        decode.connect("autoplug-sort", sort_decoders)
+        self._dec_id2 = decode.connect("autoplug-sort", sort_decoders)
 
         chroma = Gst.ElementFactory.make("chromaprint", None)
         fake = Gst.ElementFactory.make("fakesink", None)
@@ -99,8 +90,8 @@ class FingerPrintPipeline(object):
 
         # bus
         self._bus = bus = pipe.get_bus()
+        self._bus_id = bus.connect("message", self._bus_message)
         bus.add_signal_watch()
-        bus.connect("message", self._bus_message)
 
     def start(self, song, callback):
         """Start processing a new song"""
@@ -114,18 +105,36 @@ class FingerPrintPipeline(object):
         self._length = song("~#length")
 
         self._filesrc.set_property("location", song["~filename"])
-        self._bus.add_signal_watch()
         self._pipe.set_state(Gst.State.PLAYING)
 
-    def stop(self):
-        """Abort processing. Can be called multiple times"""
+    def _reset(self):
+        """Reset, so start() can be called again"""
 
-        if not self._song:
+        if self.is_idle():
             return
-        self._bus.remove_signal_watch()
+
         self._pipe.set_state(Gst.State.NULL)
         self._song = None
         self._callback = None
+
+    def stop(self):
+        """Abort processing. Can be called multiple times.
+        After this returns the pipeline isn't usable any more.
+        """
+
+        self._reset()
+
+        if not self._pipe:
+            return
+
+        self._bus.remove_signal_watch()
+        self._bus.disconnect(self._bus_id)
+        self._dec.disconnect(self._dec_id)
+        self._dec.disconnect(self._dec_id2)
+        self._dec = None
+        self._filesrc = None
+        self._bus = None
+        self._pipe = None
 
     def is_idle(self):
         """If start() can be called"""

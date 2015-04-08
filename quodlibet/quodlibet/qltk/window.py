@@ -1,13 +1,41 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012,2014 Christoph Reiter
+#                2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
+import sys
+import os
+
 from gi.repository import Gtk, GObject, Gdk
 
 from quodlibet import config
 from quodlibet.qltk import get_top_parent, is_wayland
+from quodlibet.util import DeferredSignal
+from quodlibet.util import connect_obj, connect_destroy
+
+
+def should_use_header_bar():
+    settings = Gtk.Settings.get_default()
+    if not settings:
+        return False
+    if not hasattr(settings.props, "gtk_dialogs_use_header"):
+        return False
+    return settings.get_property("gtk-dialogs-use-header")
+
+
+class Dialog(Gtk.Dialog):
+    """A Gtk.Dialog subclass which supports the use_header_bar property
+    for all Gtk versions and will ignore it if header bars shouldn't be
+    used according to GtkSettings.
+    """
+
+    def __init__(self, *args, **kwargs):
+        if not should_use_header_bar():
+            kwargs.pop("use_header_bar", None)
+        super(Dialog, self).__init__(*args, **kwargs)
 
 
 class Window(Gtk.Window):
@@ -19,13 +47,16 @@ class Window(Gtk.Window):
     """
 
     windows = []
+    _preven_inital_show = False
 
     __gsignals__ = {
-        "close-accel": (GObject.SIGNAL_RUN_LAST | GObject.SIGNAL_ACTION,
+        "close-accel": (GObject.SignalFlags.RUN_LAST |
+                            GObject.SignalFlags.ACTION,
                         GObject.TYPE_NONE, ())
     }
 
     def __init__(self, *args, **kwargs):
+        self._header_bar = None
         dialog = kwargs.pop("dialog", True)
         super(Window, self).__init__(*args, **kwargs)
         type(self).windows.append(self)
@@ -41,7 +72,74 @@ class Window(Gtk.Window):
         else:
             esc, mod = Gtk.accelerator_parse("Escape")
             self.add_accelerator('close-accel', self.__accels, esc, mod, 0)
-        self.connect_object('destroy', type(self).windows.remove, self)
+        connect_obj(self, 'destroy', type(self).windows.remove, self)
+
+    def set_default_size(self, width, height):
+        # https://bugzilla.gnome.org/show_bug.cgi?id=740922
+        if self._header_bar:
+            if width != -1:
+                width += min((width - 174), 56)
+            if height != -1:
+                height += 84
+        super(Window, self).set_default_size(width, height)
+
+    def use_header_bar(self):
+        """Try to use a headerbar, returns the widget or None in case
+        GTK+ is too old or headerbars are disabled (under xfce for example)
+        """
+
+        assert not self._header_bar
+
+        if not should_use_header_bar():
+            return False
+
+        header_bar = Gtk.HeaderBar()
+        header_bar.set_show_close_button(True)
+        header_bar.show()
+        old_title = self.get_title()
+        self.set_titlebar(header_bar)
+        if old_title is not None:
+            self.set_title(old_title)
+        self._header_bar = header_bar
+        self.set_default_size(*self.get_default_size())
+        return header_bar
+
+    def has_close_button(self):
+        """Returns True in case we are sure that the window decorations include
+        a close button.
+        """
+
+        if self.get_type_hint() == Gdk.WindowTypeHint.NORMAL:
+            return True
+
+        if os.name == "nt":
+            return True
+
+        if sys.platform == "darwin":
+            return True
+
+        if self._header_bar is not None:
+            return self._header_bar.get_show_close_button()
+
+        return False
+
+    def present(self):
+        """A version of present that also works if not called from an event
+        handler (there is no active input event).
+        See https://bugzilla.gnome.org/show_bug.cgi?id=688830
+        """
+
+        try:
+            from gi.repository import GdkX11
+        except ImportError:
+            super(Window, self).present()
+        else:
+            window = self.get_window()
+            if window and isinstance(window, GdkX11.X11Window):
+                timestamp = GdkX11.x11_get_server_time(window)
+                self.present_with_time(timestamp)
+            else:
+                super(Window, self).present()
 
     def set_transient_for(self, parent):
         """Set a parent for the window.
@@ -69,12 +167,30 @@ class Window(Gtk.Window):
         if not self.emit('delete-event', Gdk.Event.new(Gdk.EventType.DELETE)):
             self.destroy()
 
+    @classmethod
+    def prevent_inital_show(cls, value):
+        cls._preven_inital_show = bool(value)
+
+    def show_maybe(self):
+        """Show the window, except if prevent_inital_show() was called and
+        this is the first time.
+
+        Returns whether the window was shown.
+        """
+
+        if not self._preven_inital_show:
+            self.show()
+        return not self._preven_inital_show
+
 
 class PersistentWindowMixin(object):
     """A mixin for saving/restoring window size/position/maximized state"""
 
     def enable_window_tracking(self, config_prefix, size_suffix=""):
-        """Enable tracking/saving of changes and restore size/pos/maximized
+        """Enable tracking/saving of changes and restore size/pos/maximized.
+
+        Make sure to call set_transient_for() before since position is
+        restored relative to the parent in this case.
 
         config_prefix -- prefix for the config key
                          (prefix_size, prefix_position, prefix_maximized)
@@ -87,9 +203,15 @@ class PersistentWindowMixin(object):
         self.__state = 0
         self.__name = config_prefix
         self.__size_suffix = size_suffix
-        self.connect('configure-event', self.__save_size)
+        self.__save_size_pos_deferred = DeferredSignal(
+            self.__do_save_size_pos, timeout=50, owner=self)
+        self.connect('configure-event', self.__configure_event)
         self.connect('window-state-event', self.__window_state_changed)
         self.connect('notify::visible', self.__visible_changed)
+        parent = self.get_transient_for()
+        if parent:
+            connect_destroy(
+                parent, 'configure-event', self.__parent_configure_event)
         self.__restore_window_state()
 
     def __visible_changed(self, *args):
@@ -119,30 +241,82 @@ class PersistentWindowMixin(object):
 
     def __restore_position(self):
         print_d("Restore position")
-        pos = config.get('memory', self.__conf("position"), "-1 -1")
-        x, y = map(int, pos.split())
-        if x >= 0 and y >= 0:
-            self.move(x, y)
+        pos = config.get('memory', self.__conf("position"), "")
+        if not pos:
+            return
+
+        try:
+            x, y = map(int, pos.split())
+        except ValueError:
+            return
+
+        parent = self.get_transient_for()
+        if parent:
+            px, py = parent.get_position()
+            x += px
+            y += py
+
+        self.move(x, y)
 
     def __restore_size(self):
         print_d("Restore size")
-        value = config.get('memory', self.__conf("size"), "-1 -1")
-        x, y = map(int, value.split())
+        value = config.get('memory', self.__conf("size"), "")
+        if not value:
+            return
+
+        try:
+            x, y = map(int, value.split())
+        except ValueError:
+            return
+
         screen = self.get_screen()
         x = min(x, screen.get_width())
         y = min(y, screen.get_height())
         if x >= 1 and y >= 1:
             self.resize(x, y)
 
-    def __save_size(self, window, event):
+    def __parent_configure_event(self, window, event):
+        # since our position is relative to the parent if we have one,
+        # we also need to save our position if the parent position changes
+        self.__do_save_pos()
+        return False
+
+    def __configure_event(self, window, event):
+        # xfwm4 resized the window before it maximizes it, which leads
+        # to QL remembering the wrong size. Work around that by waiting
+        # until configure-event settles down, at which point the maximized
+        # state should be set
+        # WARNING: we can't keep the event, because PyGObject doesn't
+        # keep it alive; so extract width/height before returning here.
+
+        self.__save_size_pos_deferred(event.width, event.height)
+        return False
+
+    def __do_save_size_pos(self, width, height):
         if self.__state & Gdk.WindowState.MAXIMIZED:
             return
 
-        value = "%d %d" % (event.width, event.height)
+        value = "%d %d" % (width, height)
         config.set("memory", self.__conf("size"), value)
-        if self.get_property("visible"):
-            pos_value = '%s %s' % self.get_position()
-            config.set('memory', self.__conf("position"), pos_value)
+
+        self.__do_save_pos()
+
+    def __do_save_pos(self):
+        if self.__state & Gdk.WindowState.MAXIMIZED:
+            return
+
+        if not self.get_property("visible"):
+            return
+
+        x, y = self.get_position()
+        parent = self.get_transient_for()
+        if parent:
+            px, py = parent.get_position()
+            x -= px
+            y -= py
+
+        pos_value = '%s %s' % (x, y)
+        config.set('memory', self.__conf("position"), pos_value)
 
     def __window_state_changed(self, window, event):
         self.__state = event.new_window_state
@@ -152,17 +326,18 @@ class PersistentWindowMixin(object):
         config.set("memory", self.__conf("maximized"), maximized)
 
 
-class UniqueWindow(Window):
-    """A wrapper for the window class to get a one instance per class window.
+class _Unique(object):
+    """A mixin for the window class to get a one instance per class window.
     The is_not_unique method will return True if the window
-    is already there."""
+    is already there.
+    """
 
     __window = None
 
     def __new__(klass, *args, **kwargs):
         window = klass.__window
         if window is None:
-            return super(UniqueWindow, klass).__new__(klass, *args, **kwargs)
+            return super(_Unique, klass).__new__(klass, *args, **kwargs)
         #Look for widgets in the args, if there is one and it has
         #a new top level window, reparent and reposition the window.
         widgets = filter(lambda x: isinstance(x, Gtk.Widget), args)
@@ -178,16 +353,19 @@ class UniqueWindow(Window):
 
     @classmethod
     def is_not_unique(klass):
-        if klass.__window:
-            return True
+        return bool(klass.__window)
 
     def __init__(self, *args, **kwargs):
         if type(self).__window:
             return
         else:
             type(self).__window = self
-        super(UniqueWindow, self).__init__(*args, **kwargs)
-        self.connect_object('destroy', self.__destroy, self)
+        super(_Unique, self).__init__(*args, **kwargs)
+        connect_obj(self, 'destroy', self.__destroy, self)
 
     def __destroy(self, *args):
         type(self).__window = None
+
+
+class UniqueWindow(_Unique, Window):
+    pass

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 
 if os.name == "nt":
@@ -6,17 +7,16 @@ if os.name == "nt":
 
 from gi.repository import Gtk, GObject
 
-from quodlibet import util
 from quodlibet.plugins.editing import RenameFilesPlugin
 from quodlibet.util.path import iscommand
+from quodlibet.util import connect_obj
 
 
 class Kakasi(RenameFilesPlugin, Gtk.CheckButton):
     PLUGIN_ID = "Kana/Kanji Simple Inverter"
     PLUGIN_NAME = _("Kana/Kanji Simple Inverter")
-    PLUGIN_DESC = _("Convert kana/kanji to romaji before renaming.")
+    PLUGIN_DESC = _("Converts kana/kanji to romaji before renaming.")
     PLUGIN_ICON = Gtk.STOCK_CONVERT
-    PLUGIN_VERSION = "1"
 
     __gsignals__ = {
         "preview": (GObject.SignalFlags.RUN_LAST, None, ())
@@ -25,9 +25,11 @@ class Kakasi(RenameFilesPlugin, Gtk.CheckButton):
     def __init__(self):
         super(Kakasi, self).__init__(
             _("Romanize _Japanese text"), use_underline=True)
-        self.connect_object('toggled', self.emit, 'preview')
+        connect_obj(self, 'toggled', self.emit, 'preview')
 
-    active = property(lambda s: s.get_active())
+    @property
+    def active(self):
+        return self.get_active()
 
     # Use filter list rather than filter to avoid starting a new process
     # for each filename.
@@ -50,4 +52,4 @@ class Kakasi(RenameFilesPlugin, Gtk.CheckButton):
 if not iscommand("kakasi"):
     from quodlibet import plugins
     raise plugins.PluginImportException(
-        "Couldn't find the 'Kanji Kana Simple Inverter' (kakasi).")
+        _("Couldn't find the 'Kanji Kana Simple Inverter' (kakasi)."))

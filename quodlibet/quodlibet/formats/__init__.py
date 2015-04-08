@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2004-2005 Joe Wreschnig, Michael Urman
 #           2012 Christoph Reiter
 #
@@ -18,6 +19,7 @@ mimes = set()
 _infos = {}
 modules = []
 names = []
+types = []
 
 
 def init():
@@ -25,8 +27,9 @@ def init():
 
     import mutagen
     if mutagen.version < MinVersions.MUTAGEN:
-        print_w("Mutagen %s required. %s found."
-                % (MinVersions.MUTAGEN, mutagen.version_string))
+        raise ImportError(
+            "Mutagen %s required. %s found." %
+            (MinVersions.MUTAGEN, mutagen.version_string))
 
     base = os.path.dirname(__file__)
     load_pyc = os.name == 'nt'
@@ -39,6 +42,8 @@ def init():
 
         for ext in format.extensions:
             _infos[ext] = format.info
+
+        types.extend(format.types)
 
         if format.extensions:
             for type_ in format.types:
@@ -54,6 +59,11 @@ def init():
 
     modules.sort()
     names.sort()
+
+    # This can be used for the quodlibet.desktop file
+    desktop_mime_types = "MimeType=" + \
+        ";".join(sorted(set([m.split(";")[0] for m in mimes]))) + ";"
+    print_d(desktop_mime_types)
 
     if not _infos:
         raise SystemExit("No formats found!")
@@ -88,6 +98,10 @@ def filter(filename):
     return filename.lower().endswith(_extensions)
 
 
-from quodlibet.formats._audio import USEFUL_TAGS, MACHINE_TAGS, PEOPLE
+from quodlibet.formats._audio import PEOPLE
 from quodlibet.formats._audio import DUMMY_SONG
 from quodlibet.formats._image import EmbeddedImage
+
+EmbeddedImage
+DUMMY_SONG
+PEOPLE

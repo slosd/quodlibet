@@ -1,11 +1,13 @@
+# -*- coding: utf-8 -*-
 from gi.repository import Gtk
 
 from tests import TestCase
 
 from quodlibet.formats._audio import AudioFile
+from quodlibet.util.path import fsnative
 from quodlibet.qltk.delete import DeleteDialog, TrashDialog, TrashMenuItem
 
-SONG = AudioFile({"~filename": "/dev/null"})
+SONG = AudioFile({"~filename": fsnative(u"/dev/null")})
 SONG.sanitize()
 
 

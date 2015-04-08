@@ -1,29 +1,38 @@
-from tests import TestCase, DATA_DIR, mkstemp
+# -*- coding: utf-8 -*-
+from tests import TestCase, DATA_DIR
 
 import os
 
 from quodlibet import config
+from quodlibet.util.path import is_fsnative, fsnative
 from quodlibet.formats._audio import AudioFile
 from quodlibet.formats._audio import INTERN_NUM_DEFAULT
 
 bar_1_1 = AudioFile({
-    "~filename": "/fakepath/1",
+    "~filename": fsnative(u"/fakepath/1"),
     "title": "A song",
     "discnumber": "1/2", "tracknumber": "1/3",
     "artist": "Foo", "album": "Bar"})
 bar_1_2 = AudioFile({
-    "~filename": "/fakepath/2",
+    "~filename": fsnative(u"/fakepath/2"),
     "title": "Perhaps another",
     "discnumber": "1", "tracknumber": "2/3",
     "artist": "Lali-ho!", "album": "Bar",
     "date": "2004-12-12", "originaldate": "2005-01-01",
     "~#filesize": 1024 ** 2})
 bar_2_1 = AudioFile({
-    "~filename": "does not/exist",
+    "~filename": fsnative(u"does not/exist"),
     "title": "more songs",
     "discnumber": "2/2", "tracknumber": "1",
     "artist": "Foo\nI have two artists", "album": "Bar",
     "lyricist": "Foo", "composer": "Foo", "performer": "I have two artists"})
+bar_va = AudioFile({
+    "~filename": "/fakepath/3",
+    "title": "latest",
+    "artist": "Foo\nI have two artists",
+    "album": "Bar",
+    "albumartist": "Various Artists",
+    "performer": "Jay-Z"})
 
 quux = AudioFile({
     "~filename": os.path.join(DATA_DIR, "asong.ogg"),
@@ -50,6 +59,11 @@ class TAudioFile(TestCase):
         self.failIf("artist" in quux.realkeys())
         self.failIf("~filename" in quux.realkeys())
         self.failUnless("album" in quux.realkeys())
+
+    def test_iterrealitems(self):
+        self.assertEqual(
+            list(quux.iterrealitems()),
+            [('album', u'Quuxly')])
 
     def test_trackdisc(self):
         self.failUnlessEqual(bar_1_1("~#track"), 1)
@@ -98,6 +112,9 @@ class TAudioFile(TestCase):
         self.failUnlessEqual(bar_1_1("~people"), "Foo")
         self.failUnlessEqual(bar_1_2("~people"), "Lali-ho!")
         self.failUnlessEqual(bar_2_1("~people"), "Foo\nI have two artists")
+        # See Issue 1034
+        self.failUnlessEqual(bar_va("~people"),
+                             "Foo\nI have two artists\nVarious Artists\nJay-Z")
 
     def test_call_multiple(self):
         for song in [quux, bar_1_1, bar_2_1]:
@@ -129,10 +146,10 @@ class TAudioFile(TestCase):
             self.failUnlessEqual(bar_1_1.list_separate(key), [bar_1_1(key)])
 
         self.failUnlessEqual(bar_2_1.list_separate("~artist~album"),
-             ['Foo - Bar', 'I have two artists - Bar'])
+                             ['Foo - Bar', 'I have two artists - Bar'])
 
         self.failUnlessEqual(bar_2_1.list_separate("~artist~~#track"),
-             ['Foo - 1', 'I have two artists - 1'])
+                             ['Foo - 1', 'I have two artists - 1'])
 
     def test_comma(self):
         for key in bar_1_1.realkeys():
@@ -164,16 +181,22 @@ class TAudioFile(TestCase):
         self.failIf(quux.can_change("=foobar"))
         self.failIf(quux.can_change("foo=bar"))
         self.failIf(quux.can_change(""))
+        self.failUnless(quux.can_change("foo bar"))
 
-        self.failUnless(quux.can_change("foo bar"))
+    def test_is_writable(self):
+        self.assertTrue(quux.is_writable())
         os.chmod(quux["~filename"], 0444)
-        self.failIf(quux.can_change("foo bar"))
+        self.assertFalse(quux.is_writable())
         os.chmod(quux["~filename"], 0644)
-        self.failUnless(quux.can_change("foo bar"))
+        self.assertTrue(quux.is_writable())
+
+    def test_can_multiple_values(self):
+        self.assertEqual(quux.can_multiple_values(), True)
+        self.assertTrue(quux.can_multiple_values("artist"))
 
     def test_rename(self):
         old_fn = quux("~basename")
-        new_fn = "anothersong.mp3"
+        new_fn = fsnative(u"anothersong.mp3")
         dir = DATA_DIR
         self.failUnless(quux.exists())
         quux.rename(new_fn)
@@ -185,7 +208,7 @@ class TAudioFile(TestCase):
         self.failUnless(quux.exists())
 
         # move out of parent dir and back
-        quux.rename("/tmp/more_test_data")
+        quux.rename(fsnative(u"/tmp/more_test_data"))
         self.failIf(os.path.exists(dir + old_fn))
         self.failUnless(quux.exists())
         quux.rename(dir + old_fn)
@@ -194,7 +217,8 @@ class TAudioFile(TestCase):
     def test_rename_to_existing(self):
         quux.rename(quux("~basename"))
         if os.name != "nt":
-            self.failUnlessRaises(ValueError, quux.rename, "/dev/null")
+            self.failUnlessRaises(
+                ValueError, quux.rename, fsnative(u"/dev/null"))
         self.failUnlessRaises(ValueError, quux.rename,
                               os.path.join(DATA_DIR, "silence-44-s.ogg"))
 
@@ -215,6 +239,16 @@ class TAudioFile(TestCase):
         self.failIf(song["artist"] in song.website())
         self.failUnless(song["labelid"] in song.website())
 
+    def test_lyric_filename(self):
+        song = AudioFile()
+        song["~filename"] = fsnative(u"filename")
+        self.assertTrue(is_fsnative(song.lyric_filename))
+        song["title"] = u"Title"
+        song["artist"] = u"Artist"
+        self.assertTrue(is_fsnative(song.lyric_filename))
+        song["lyricist"] = u"Lyricist"
+        self.assertTrue(is_fsnative(song.lyric_filename))
+
     def test_sanitize(self):
         q = AudioFile(quux)
         b = AudioFile(bar_1_1)
@@ -222,7 +256,7 @@ class TAudioFile(TestCase):
         b.pop('~filename')
         self.failUnlessRaises(ValueError, b.sanitize)
         n = AudioFile({"artist": u"foo\0bar", "title": u"baz\0",
-                        "~filename": "whatever"})
+                       "~filename": fsnative(u"whatever")})
         n.sanitize()
         self.failUnlessEqual(n["artist"], "foo\nbar")
         self.failUnlessEqual(n["title"], "baz")
@@ -234,13 +268,68 @@ class TAudioFile(TestCase):
         self.failUnlessEqual(set(q.list("~performers:roles")),
                              set(["A (Vocals)", "B (Guitar)", "C"]))
 
+    def test_performers_multi_value(self):
+        q = AudioFile([
+            ("performer:vocals", "X\nA\nY"),
+            ("performer:guitar", "Y\nB\nA"),
+            ("performer", "C\nF\nB\nA"),
+        ])
+
+        self.failUnlessEqual(
+            set(q.list("~performer")), set(["A", "B", "C", "F", "X", "Y"]))
+
+        self.failUnlessEqual(
+            set(q.list("~performer:roles")), set([
+                    "A (Guitar, Vocals)",
+                    "C",
+                    "B (Guitar)",
+                    "X (Vocals)",
+                    "Y (Guitar, Vocals)",
+                    "F",
+                ]))
+
     def test_people(self):
         q = AudioFile([("performer:vocals", "A"), ("performer:guitar", "B"),
                        ("performer", "C"), ("arranger", "A"),
                        ("albumartist", "B"), ("artist", "C")])
-        self.failUnlessEqual(q.list("~people"), ["B", "C", "A"])
+        self.failUnlessEqual(q.list("~people"), ["C", "B", "A"])
         self.failUnlessEqual(q.list("~people:roles"),
-                             ["B (Guitar)", "C", "A (Arrangement, Vocals)"])
+                         ["C", "B (Guitar)", "A (Arrangement, Vocals)"])
+
+    def test_people_mix(self):
+        q = AudioFile([
+            ("performer:arrangement", "A"),
+            ("arranger", "A"),
+            ("performer", "A"),
+            ("performer:foo", "A"),
+        ])
+        self.failUnlessEqual(q.list("~people"), ["A"])
+        self.failUnlessEqual(q.list("~people:roles"),
+                             ["A (Arrangement, Arrangement, Foo)"])
+
+    def test_people_multi_value(self):
+        q = AudioFile([
+            ("arranger", "A\nX"),
+            ("performer", "A\nY"),
+            ("performer:foo", "A\nX"),
+        ])
+
+        self.failUnlessEqual(q.list("~people"), ["A", "Y", "X"])
+        self.failUnlessEqual(
+            q.list("~people:roles"),
+            ["A (Arrangement, Foo)", "Y", "X (Arrangement, Foo)"])
+
+    def test_people_individuals(self):
+        q = AudioFile({"artist": "A\nX", "albumartist": "Various Artists"})
+        self.failUnlessEqual(q.list("~people:real"), ["A", "X"])
+
+        lonely = AudioFile({"artist": "various artists", "title": "blah"})
+        self.failUnlessEqual(lonely.list("~people:real"),
+                             ["various artists"])
+
+        lots = AudioFile({"artist": "Various Artists", "albumartist": "V.A."})
+        self.failUnlessEqual(lots.list("~people:real"),
+                             ["Various Artists"])
 
     def test_peoplesort(self):
         q = AudioFile([("performer:vocals", "The A"),
@@ -372,7 +461,7 @@ class TAudioFile(TestCase):
             ]
         for tags, expected in album_key_tests:
             afile = AudioFile(**tags)
-            afile.sanitize('/dir/fn')
+            afile.sanitize(fsnative(u'/dir/fn'))
             self.failUnlessEqual(afile.album_key, expected)
 
     def test_eq_ne(self):
@@ -382,15 +471,16 @@ class TAudioFile(TestCase):
     def test_invalid_fs_encoding(self):
         # issue 798
         a = AudioFile()
-        a["~filename"] = "/\xf6\xe4\xfc/\xf6\xe4\xfc.ogg" # latin 1 encoded
-        a.sort_by_func("~filename")(a)
-        a.sort_by_func("~basename")(a)
-
-        # windows
-        a["~filename"] = "/\xf6\xe4\xfc/\xf6\xe4\xfc.ogg".decode("latin-1")
-        a.sort_by_func("~filename")(a)
-        a.sort_by_func("~basename")(a)
-        a.sort_by_func("~dirname")(a)
+        if os.name != "nt":
+            a["~filename"] = "/\xf6\xe4\xfc/\xf6\xe4\xfc.ogg" # latin 1 encoded
+            a.sort_by_func("~filename")(a)
+            a.sort_by_func("~basename")(a)
+        else:
+            # windows
+            a["~filename"] = "/\xf6\xe4\xfc/\xf6\xe4\xfc.ogg".decode("latin-1")
+            a.sort_by_func("~filename")(a)
+            a.sort_by_func("~basename")(a)
+            a.sort_by_func("~dirname")(a)
 
     def test_sort_cache(self):
         copy = AudioFile(bar_1_1)
@@ -431,12 +521,12 @@ class TAudioFile(TestCase):
         # On linux we take the byte stream and escape it.
         # see g_filename_to_uri
 
-        f = AudioFile({"~filename": "/\x87\x12.mp3", "title": "linux"})
-        self.failUnlessEqual(f("~uri"), "file:///%87%12.mp3")
-
         if os.name == "nt":
             f = AudioFile({"~filename": u"/\xf6\xe4.mp3", "title": "win"})
             self.failUnlessEqual(f("~uri"), "file:///%C3%B6%C3%A4.mp3")
+        else:
+            f = AudioFile({"~filename": "/\x87\x12.mp3", "title": "linux"})
+            self.failUnlessEqual(f("~uri"), "file:///%87%12.mp3")
 
     def tearDown(self):
         os.unlink(quux["~filename"])
@@ -453,6 +543,17 @@ class Treplay_gain(TestCase):
                         "replaygain_track_gain": "+1.0000001 dB",
                         "replaygain_track_peak": "0.9"}
         self.song = AudioFile(self.rg_data)
+        self.no_rg_song = AudioFile()
+
+    def test_no_rg_song(self):
+        scale = self.no_rg_song.replay_gain(["track"], 0, -6.0)
+        self.failUnlessAlmostEqual(scale, self.minus_6db)
+
+        scale = self.no_rg_song.replay_gain(["track"], +10, +10)
+        self.failUnlessEqual(scale, 1.0)
+
+        scale = self.no_rg_song.replay_gain(["track"], -16.0, +10)
+        self.failUnlessAlmostEqual(scale, self.minus_6db)
 
     def test_nogain(self):
         self.failUnlessEqual(self.song.replay_gain(["none", "track"]), 1)
@@ -517,103 +618,3 @@ class Treplay_gain(TestCase):
             self.failUnlessAlmostEqual(
                 val, exp, places=5,
                 msg="%s should be %s not %s" % (key, exp, val))
-
-
-# Special test case for find_cover since it has to create/remove
-# various files.
-class Tfind_cover(TestCase):
-    def setUp(self):
-        config.init()
-        self.dir = os.path.realpath(quux("~dirname"))
-        self.files = [self.full_path("12345.jpg"),
-                      self.full_path("nothing.jpg")
-                      ]
-        for f in self.files:
-            file(f, "w").close()
-
-    def full_path(self, path):
-        return os.path.join(self.dir, path)
-
-    def test_dir_not_exist(self):
-        self.failIf(bar_2_1.find_cover())
-
-    def test_nothing(self):
-        self.failIf(quux.find_cover())
-
-    def test_labelid(self):
-        quux["labelid"] = "12345"
-        self.failUnlessEqual(os.path.abspath(quux.find_cover().name),
-                             self.full_path("12345.jpg"))
-        del(quux["labelid"])
-
-    def test_regular(self):
-        files = [os.path.join(self.dir, f) for f in
-                 ["cover.png", "folder.jpg", "frontcover.jpg",
-                  "front_folder_cover.gif", "jacket_cover.front.folder.jpeg"]]
-        for f in files:
-            file(f, "w").close()
-            self.files.append(f)
-            self.failUnlessEqual(os.path.abspath(quux.find_cover().name), f)
-        self.test_labelid() # labelid must work with other files present
-
-    def test_file_encoding(self):
-        if os.name == "nt":
-            return
-
-        f = self.full_path("\xff\xff\xff\xff - cover.jpg")
-        file(f, "w").close()
-        self.files.append(f)
-        self.assertTrue(isinstance(quux("album"), unicode))
-        h = quux.find_cover()
-        self.assertEqual(h.name, f)
-
-    def test_intelligent(self):
-        song = quux
-        song["artist"] = "Q-Man"
-        song["title"] = "First Q falls hardest"
-        files = [self.full_path(f) for f in
-                 ["Quuxly - back.jpg", "Quuxly.jpg", "q-man - quxxly.jpg",
-                  "folder.jpeg", "Q-man - Quuxly (FRONT).jpg"]]
-        for f in files:
-            file(f, "w").close()
-            self.files.append(f)
-            cover = song.find_cover()
-            if cover:
-                actual = os.path.abspath(cover.name)
-                self.failUnlessEqual(actual, f)
-            else:
-                # Here, no cover is better than the back...
-                self.failUnlessEqual(f, self.full_path("Quuxly - back.jpg"))
-
-    def test_embedded_special_cover_words(self):
-        """Tests that words incidentally containing embedded "special" words
-        album keywords (e.g. cover, disc, back) don't trigger
-        See Issue 818"""
-
-        song = AudioFile({
-            "~filename": "tests/data/asong.ogg",
-            "album": "foobar",
-            "title": "Ode to Baz",
-            "artist": "Q-Man",
-        })
-        files = [self.full_path(f) for f in
-                 ['back.jpg',
-                  'discovery.jpg', "Pharell - frontin'.jpg",
-                  'nickelback - Curb.jpg',
-                  'foobar.jpg', 'folder.jpg',     # Though this is debatable
-                  'Q-Man - foobar.jpg', 'Q-man - foobar (cover).jpg']]
-        for f in files:
-            file(f, "w").close()
-            self.files.append(f)
-            cover = song.find_cover()
-            if cover:
-                actual = os.path.abspath(cover.name)
-                self.failUnlessEqual(
-                    actual, f, "\"%s\" should trump \"%s\"" % (f, actual))
-            else:
-                self.failUnless(f, self.full_path('back.jpg'))
-
-    def tearDown(self):
-        for f in self.files:
-            os.unlink(f)
-        config.quit()

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2011,2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -130,8 +131,6 @@ GetConsoleScreenBufferInfo = None
 
 
 def _init_windll():
-    from ctypes import windll
-
     global GetStdHandle, SetConsoleTextAttribute, GetConsoleScreenBufferInfo
 
     # LoadLibrary compared to getattr gets an uncached handle.

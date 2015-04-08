@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
@@ -10,6 +11,7 @@ from gi.repository import Gtk, GLib
 from quodlibet import print_d, app, config
 from quodlibet.plugins import PluginConfigMixin
 from quodlibet.qltk import Message
+from quodlibet.qltk.x import Frame
 from quodlibet.qltk.entry import UndoEntry
 from quodlibet.util.library import get_scan_dirs
 
@@ -24,18 +26,21 @@ class SqueezeboxPluginMixin(PluginConfigMixin):
 
     # Maintain a singleton; we only support one SB server live in QL
     server = None
-    ql_base_dir = (os.path.realpath(get_scan_dirs()[0])
-                   if get_scan_dirs() else "")
-    print_d("Using QL library dir of %s" % ql_base_dir)
 
     # We want all derived classes to share the config section
     CONFIG_SECTION = "squeezebox"
 
     @classmethod
+    def _get_ql_base_dir(cls):
+        dirs = get_scan_dirs()
+        return os.path.realpath(dirs[0]) if dirs else ""
+
+    @classmethod
     def get_sb_path(cls, song):
         """Gets a SB path to `song` by simple substitution"""
         path = song('~filename')
-        return path.replace(cls.ql_base_dir, cls.server.get_library_dir())
+        return path.replace(
+            cls._get_ql_base_dir(), cls.server.get_library_dir())
 
     @classmethod
     def post_reconnect(cls):
@@ -67,8 +72,9 @@ class SqueezeboxPluginMixin(PluginConfigMixin):
                                          cls.server.current_player)
                 ret = dialog.run() or 0
             else:
-                cls.quick_dialog("Squeezebox OK. Using the only player (%s)."
-                                 % cls.server.players[0])
+                cls.quick_dialog(
+                    _("Squeezebox OK. Using the only player (%s).")
+                    % cls.server.players[0])
             cls.set_player(ret)
             # TODO: verify sanity of SB library path
 
@@ -91,16 +97,8 @@ class SqueezeboxPluginMixin(PluginConfigMixin):
             cls.init_server()
         cfg = cls.server.config
 
-        # Server settings Frame
-        cfg_frame = Gtk.Frame(label=_("<b>Squeezebox Server</b>"))
-        cfg_frame.set_shadow_type(Gtk.ShadowType.NONE)
-        cfg_frame.get_label_widget().set_use_markup(True)
-        cfg_frame_align = Gtk.Alignment.new(0, 0, 1, 1)
-        cfg_frame_align.set_padding(6, 6, 12, 12)
-        cfg_frame.add(cfg_frame_align)
-
         # Tabulate all settings for neatness
-        table = Gtk.Table(3, 2)
+        table = Gtk.Table(n_rows=3, n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
         rows = []
@@ -139,12 +137,14 @@ class SqueezeboxPluginMixin(PluginConfigMixin):
             table.attach(entry, 1, 2, row, row + 1)
 
         # Add verify button
-        button = Gtk.Button(_("_Verify settings"), use_underline=True)
+        button = Gtk.Button(label=_("_Verify settings"), use_underline=True)
         button.set_sensitive(cls.server is not None)
         button.connect('clicked', cls.check_settings)
         table.attach(button, 0, 2, row + 1, row + 2)
 
-        cfg_frame_align.add(table)
+        # Server settings Frame
+        cfg_frame = Frame(_("Squeezebox Server"), table)
+
         vb.pack_start(cfg_frame, True, True, 0)
         debug = cls.ConfigCheckButton(_("Debug"), "debug")
         vb.pack_start(debug, True, True, 0)
@@ -162,7 +162,8 @@ class SqueezeboxPluginMixin(PluginConfigMixin):
             port=cls.config_get("server_port", 9090),
             user=cls.config_get("server_user", ""),
             password=cls.config_get("server_password", ""),
-            library_dir=cls.config_get("server_library_dir", cls.ql_base_dir),
+            library_dir=cls.config_get(
+                "server_library_dir", cls._get_ql_base_dir()),
             current_player=cur,
             debug=cls.config_get_bool("debug", False))
         try:

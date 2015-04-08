@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -12,120 +13,160 @@ from quodlibet.qltk.playorder import ORDERS
 from quodlibet.qltk.models import ObjectStore
 
 
-def check_sourced(func):
-    # Validate sourced flags after each action that could lead to a changed
-    # iter (only ones triggerd by the order, no iter removal!)
-    def wrap(self, *args, **kwargs):
-        res = func(self, *args, **kwargs)
+class PlaylistMux(object):
+    """Provides the PlaylistModel interface combining the song list model and
+    the queue one.
+
+    If no longer needed, call destroy().
+    """
+
+    def __init__(self, player, q, pl):
+        self.q = q
+        self.pl = pl
+        self._id = player.connect('song-started', self.__song_started)
+        self._player = player
+
+    def destroy(self):
+        self._player.disconnect(self._id)
+
+    def __song_started(self, player, song):
+        if song is not None and self.q.sourced:
+            iter = self.q.find(song)
+            if iter:
+                self.q.remove(iter)
+                # we don't call _check_sourced here since we want the queue
+                # to stay sourced even if no current song is left
+
+    @property
+    def current(self):
+        """The current song or None"""
+
+        if self.q.current is not None:
+            return self.q.current
+        else:
+            return self.pl.current
+
+    def _check_sourced(self):
         if self.q.current is not None:
             self.q.sourced = True
             self.pl.sourced = False
         else:
             self.q.sourced = False
             self.pl.sourced = True
-        return res
-    return wrap
 
-
-class PlaylistMux(object):
-
-    def __init__(self, player, q, pl):
-        self.q = q
-        self.pl = pl
-        player.connect('song-started', self.__check_q)
-
-    def __check_q(self, player, song):
-        if song is not None:
-            iter = self.q.find(song)
-            if iter:
-                self.q.remove(iter)
-            self.q.reset()
-
-    def get_current(self):
-        if self.q.current is not None:
-            return self.q.current
-        else:
-            return self.pl.current
-
-    current = property(get_current)
-
-    @check_sourced
     def next(self):
+        """Switch to the next song"""
+
         if self.q.is_empty():
             self.pl.next()
-        elif self.q.current is None:
+        else:
             self.q.next()
+        self._check_sourced()
 
-    @check_sourced
     def next_ended(self):
+        """Switch to the next song (action comes from the user)"""
+
         if self.q.is_empty():
             self.pl.next_ended()
-        elif self.q.current is None:
-            self.q.next()
+        else:
+            self.q.next_ended()
+        self._check_sourced()
 
-    @check_sourced
     def previous(self):
+        """Go to the previous song"""
+
         self.pl.previous()
+        self._check_sourced()
 
-    @check_sourced
-    def go_to(self, song, explicit=False):
+    def go_to(self, song, explicit=False, source=None):
+        """Switch the current active song to song.
+
+        song can be an Gtk.TreeIter or AudioFile.
+        explicit should be True of the action comes from the user.
+        source should be the right PlaylistModel in case song is an iter.
+        """
+
         print_d("Told to go to %r" % getattr(song, "key", song))
-        self.q.go_to(None)
-        return self.pl.go_to(song, explicit)
+        main, other = self.pl, self.q
+        if source is not None:
+            assert source in (self.pl, self.q)
+            if source is self.q:
+                main, other = other, main
+        other.go_to(None)
+        res = main.go_to(song, explicit)
+        self._check_sourced()
+        return res
 
-    @check_sourced
     def reset(self):
+        """Switch to the first song"""
+
         self.q.go_to(None)
         self.pl.reset()
+        self._check_sourced()
 
     def enqueue(self, songs):
+        """Append the songs to the queue model"""
+
         self.q.append_many(songs)
 
     def unqueue(self, songs):
+        """Remove all occurrences of all passed songs in the queue"""
+
         q = self.q
         for iter_ in q.find_all(songs):
             q.remove(iter_)
 
 
 class TrackCurrentModel(ObjectStore):
-    __iter = None
-    __old_value = None
+
+    def __init__(self, *args, **kwargs):
+        super(TrackCurrentModel, self).__init__(*args, **kwargs)
+        self.__iter = None
+
+    last_current = None
+    """The last valid current song"""
 
     def set(self, songs):
+        """Clear the model and add the passed songs"""
+
         print_d("Clearing model.")
         self.clear()
         self.__iter = None
 
         print_d("Setting %d songs." % len(songs))
 
-        oldsong = self.__old_value
+        oldsong = self.last_current
         for iter_, song in itertools.izip(self.iter_append_many(songs), songs):
             if song is oldsong:
                 self.__iter = iter_
 
         print_d("Done filling model.")
 
-    def remove(self, iter_):
-        if self.__iter and self[iter_].path == self[self.__iter].path:
-            self.__iter = None
-        super(TrackCurrentModel, self).remove(iter_)
-
-    def clear(self):
-        self.__iter = None
-        super(TrackCurrentModel, self).clear()
-
     def get(self):
+        """A list of all contained songs"""
+
         return list(self.itervalues())
 
     @property
     def current(self):
+        """The current song or None"""
+
         return self.__iter and self.get_value(self.__iter, 0)
 
     @property
     def current_path(self):
+        """The Gtk.TreePath of the current song or None"""
+
         return self.__iter and self.get_path(self.__iter)
 
-    def __set_current_iter(self, iter_):
+    @property
+    def current_iter(self):
+        """The Gtk.TreeIter of the current song or None"""
+
+        return self.__iter
+
+    @current_iter.setter
+    def current_iter(self, iter_):
         if iter_ == self.__iter:
             return
         # emit a row-changed for the previous and the new iter after it is set
@@ -133,16 +174,11 @@ class TrackCurrentModel(ObjectStore):
         for it in filter(None, (self.__iter, iter_)):
             self.row_changed(self.get_path(it), it)
         self.__iter = iter_
-        self.__old_value = self.current
-
-    def __get_current_iter(self):
-        return self.__iter
-
-    current_iter = property(__get_current_iter, __set_current_iter)
+        self.last_current = self.current
 
     def find(self, song):
         """Returns the iter to the first occurrence of song in the model
-        or None
+        or None if it wasn't found.
         """
 
         # fast path
@@ -168,14 +204,30 @@ class TrackCurrentModel(ObjectStore):
                 append(iter_)
         return found
 
+    def remove(self, iter_):
+        if self.__iter and self[iter_].path == self[self.__iter].path:
+            self.__iter = None
+        super(TrackCurrentModel, self).remove(iter_)
+
+    def clear(self):
+        self.__iter = None
+        super(TrackCurrentModel, self).clear()
+
     def __contains__(self, song):
         return bool(self.find(song))
 
 
 class PlaylistModel(TrackCurrentModel):
+    """A play list model for song lists"""
+
     order = None
+    """The active play order"""
+
     repeat = False
+    """If the playlist should be repeated after it ended"""
+
     sourced = False
+    """True in case this model is the source of the currently playing song"""
 
     def __init__(self):
         super(PlaylistModel, self).__init__(object)
@@ -189,25 +241,45 @@ class PlaylistModel(TrackCurrentModel):
             self.__sigs.append(s)
 
     def next(self):
+        """Switch to the next song"""
+
         iter_ = self.current_iter
         self.current_iter = self.order.next_explicit(self, iter_)
 
     def next_ended(self):
+        """Switch to the next song (action comes from the user)"""
+
         iter_ = self.current_iter
         self.current_iter = self.order.next_implicit(self, iter_)
 
     def previous(self):
+        """Go to the previous song"""
+
         iter_ = self.current_iter
         self.current_iter = self.order.previous_explicit(self, iter_)
 
-    def go_to(self, song, explicit=False):
-        print_d("Told to go to %r" % getattr(song, "key", song))
+    def go_to(self, song_or_iter, explicit=False, source=None):
+        """Switch the current active song to song.
+
+        song can be an Gtk.TreeIter or AudioFile.
+        explicit should be True of the action comes from the user.
+        source should be this model or None.
+        """
+
+        assert source is None or source is self
+
+        print_d("Told to go to %r" % getattr(song_or_iter, "key",
+                                             song_or_iter))
 
         iter_ = None
-        if isinstance(song, Gtk.TreeIter):
-            iter_ = song
-        elif song is not None:
-            iter_ = self.find(song)
+        if isinstance(song_or_iter, Gtk.TreeIter):
+            iter_ = song_or_iter
+        elif song_or_iter is not None:
+            # We were told to go to a song that was valid but couldn't find it.
+            # Set it as last current so it gets set current when we find it in
+            # the future.
+            self.last_current = song_or_iter
+            iter_ = self.find(song_or_iter)
 
         if explicit:
             self.current_iter = self.order.set_explicit(self, iter_)
@@ -217,6 +289,8 @@ class PlaylistModel(TrackCurrentModel):
         return self.current_iter
 
     def set(self, songs):
+        """Clear the model and add the passed songs"""
+
         self.order.reset(self)
         for signal_id in self.__sigs:
             self.handler_block(signal_id)
@@ -225,6 +299,8 @@ class PlaylistModel(TrackCurrentModel):
             self.handler_unblock(signal_id)
 
     def reset(self):
+        """Switch to the first song"""
+
         self.go_to(None)
         self.order.reset(self)
         if not self.is_empty():

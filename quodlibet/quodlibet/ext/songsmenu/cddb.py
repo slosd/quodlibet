@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Michael Urman
 #           2013 Nick Boultbee
 #
@@ -21,7 +22,7 @@ except ImportError as e:
 from os import path
 from gi.repository import Gtk
 
-from quodlibet.qltk import ErrorMessage, ConfirmAction, Message
+from quodlibet.qltk import ErrorMessage
 from quodlibet.const import VERSION
 from quodlibet.util import tag, escape
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
@@ -29,13 +30,6 @@ from quodlibet.util.path import expanduser
 
 CDDB.proto = 6 # utf8 instead of latin1
 CLIENTINFO = {'client_name': "quodlibet", 'client_version': VERSION}
-
-
-class AskAction(ConfirmAction):
-    """A message dialog that asks a yes/no question."""
-    def __init__(self, *args, **kwargs):
-        kwargs["buttons"] = Gtk.ButtonsType.YES_NO
-        Message.__init__(self, Gtk.MessageType.QUESTION, *args, **kwargs)
 
 
 def sumdigits(n):
@@ -158,7 +152,7 @@ def make_info_label((disc, track), album, discid):
 class CDDBLookup(SongsMenuPlugin):
     PLUGIN_ID = 'CDDB lookup'
     PLUGIN_NAME = _('CDDB Lookup')
-    PLUGIN_DESC = 'Look up album information in FreeDB (requires CDDB.py)'
+    PLUGIN_DESC = _('Looks up album information in FreeDB. Requires CDDB.py.')
     PLUGIN_ICON = 'gtk-cdrom'
 
     def plugin_album(self, album):
@@ -262,7 +256,7 @@ class CDDBLookup(SongsMenuPlugin):
             if not albumname:
                 albumname = ngettext('%d track', '%d tracks', n) % n
             ErrorMessage(None, _("CDDB lookup failed (%s)" % stat),
-                    ngettext("%(title)s and %(count)d more...",
-                        "%(title)s and %(count)d more...", n - 1) % {
+                    ngettext(u"%(title)s and %(count)d more…",
+                        u"%(title)s and %(count)d more…", n - 1) % {
                         'title': album[0]('~basename'), 'count':
                         n - 1}).run()

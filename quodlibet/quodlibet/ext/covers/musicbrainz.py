@@ -6,17 +6,21 @@
 # published by the Free Software Foundation
 
 from os import path
-from gi.repository import Soup, Gio, GLib
+from gi.repository import Soup
 
 from quodlibet.plugins.cover import CoverSourcePlugin, cover_dir
 from quodlibet.util.cover.http import HTTPDownloadMixin
+from quodlibet.util.path import escape_filename
 
 
 class MusicBrainzCover(CoverSourcePlugin, HTTPDownloadMixin):
     PLUGIN_ID = "musicbrainz-cover"
-    PLUGIN_NAME = _("MusicBrainz cover source")
-    PLUGIN_DESC = _("Download covers from musicbrainz's cover art archive")
-    PLUGIN_VERSION = "1.0"
+    PLUGIN_NAME = _("MusicBrainz Cover Source")
+    PLUGIN_DESC = _("Downloads covers from MusicBrainz's cover art archive.")
+
+    @classmethod
+    def group_by(cls, song):
+        return song.get('musicbrainz_albumid', None)
 
     @staticmethod
     def priority():
@@ -25,7 +29,10 @@ class MusicBrainzCover(CoverSourcePlugin, HTTPDownloadMixin):
 
     @property
     def cover_path(self):
-        return path.join(cover_dir, self.mbid) if self.mbid else None
+        mbid = self.mbid
+        if mbid is None:
+            return super(MusicBrainzCover, self).cover_path
+        return path.join(cover_dir, escape_filename(mbid))
 
     @property
     def mbid(self):

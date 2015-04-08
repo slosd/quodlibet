@@ -16,7 +16,6 @@ from gi.repository import Gtk, Gst, GObject
 from quodlibet.plugins.gstelement import GStreamerPlugin
 from quodlibet import qltk, plugins
 from quodlibet import config
-from quodlibet.util import gobject_weak
 
 
 _PLUGIN_ID = "crossfeed"
@@ -63,7 +62,7 @@ class Preferences(Gtk.VBox):
     def __init__(self):
         super(Preferences, self).__init__(spacing=12)
 
-        table = Gtk.Table(3, 2)
+        table = Gtk.Table(n_rows=3, n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
@@ -89,7 +88,7 @@ class Preferences(Gtk.VBox):
         table.attach(preset_combo, 1, 2, 0, 1)
 
         fcut_scale = Gtk.HScale(
-            adjustment=Gtk.Adjustment(700, 300, 2000, 10, 100))
+            adjustment=Gtk.Adjustment.new(700, 300, 2000, 10, 100, 0))
         fcut_scale.set_tooltip_text(_SETTINGS["fcut"][1])
         labels["fcut"].set_mnemonic_widget(fcut_scale)
         fcut_scale.set_value_pos(Gtk.PositionType.RIGHT)
@@ -107,7 +106,8 @@ class Preferences(Gtk.VBox):
         fcut_scale.connect('value-changed', fcut_changed)
         fcut_scale.set_value(get_cfg("fcut"))
 
-        level_scale = Gtk.HScale(adjustment=Gtk.Adjustment(45, 10, 150, 1, 5))
+        level_scale = Gtk.HScale(
+            adjustment=Gtk.Adjustment.new(45, 10, 150, 1, 5, 0))
         level_scale.set_tooltip_text(_SETTINGS["feed"][1])
         labels["feed"].set_mnemonic_widget(level_scale)
         level_scale.set_value_pos(Gtk.PositionType.RIGHT)
@@ -161,7 +161,7 @@ class Crossfeed(GStreamerPlugin):
 
     @classmethod
     def setup_element(cls):
-        return Gst.ElementFactory.make('crossfeed', cls.PLUGIN_ID)
+        return Gst.ElementFactory.make('bs2b', cls.PLUGIN_ID)
 
     @classmethod
     def update_element(cls, element):
@@ -171,9 +171,9 @@ class Crossfeed(GStreamerPlugin):
     @classmethod
     def PluginPreferences(cls, window):
         prefs = Preferences()
-        gobject_weak(prefs.connect, "changed", lambda *x: cls.queue_update())
+        prefs.connect("changed", lambda *x: cls.queue_update())
         return prefs
 
 
 if not Crossfeed.setup_element():
-    raise plugins.MissingGstreamerElementPluginException("crossfeed")
+    raise plugins.MissingGstreamerElementPluginException("bs2b")

@@ -1,6 +1,11 @@
+# -*- coding: utf-8 -*-
 from gi.repository import Gtk
 import time
 
+import os
+import shutil
+from quodlibet import config
+from quodlibet.util import connect_obj
 from quodlibet.formats._audio import AudioFile
 
 from tests import TestCase, DATA_DIR, mkstemp, mkdtemp
@@ -49,7 +54,10 @@ class FakeSongFile(FakeSong):
     _valid = True
     _exists = True
     _mounted = True
-    mountpoint = property(lambda self: "/" if self._mounted else "/FAKE")
+
+    @property
+    def mountpoint(self):
+        return "/" if self._mounted else "/FAKE"
 
     def valid(self):
         return self._valid
@@ -218,9 +226,9 @@ class TLibrary(TestCase):
         self.changed = []
         self.removed = []
 
-        self.library.connect_object('added', list.extend, self.added)
-        self.library.connect_object('changed', list.extend, self.changed)
-        self.library.connect_object('removed', list.extend, self.removed)
+        connect_obj(self.library, 'added', list.extend, self.added)
+        connect_obj(self.library, 'changed', list.extend, self.changed)
+        connect_obj(self.library, 'removed', list.extend, self.removed)
 
     def test_add(self):
         self.library.add(self.Frange(12))
@@ -676,6 +684,25 @@ class TSongFileLibrary(TSongLibrary):
         finally:
             config.quit()
 
+    def test_add_filename_normalize_path(self):
+        if not os.name == "nt":
+            return
+
+        config.init()
+        filename = self.__get_file()
+
+        # create a equivalent path different from the original one
+        if filename.upper() == filename:
+            other = filename.lower()
+        else:
+            other = filename.upper()
+
+        song = self.library.add_filename(filename)
+        other_song = self.library.add_filename(other)
+        self.assertTrue(song is other_song)
+        os.unlink(filename)
+        config.quit()
+
 
 class TAlbumLibrary(TestCase):
     Fake = FakeSong
@@ -689,10 +716,10 @@ class TAlbumLibrary(TestCase):
         self.removed = []
 
         self._sigs = [
-            self.underlying.connect_object('added', list.extend, self.added),
-            self.underlying.connect_object(
+            connect_obj(self.underlying, 'added', list.extend, self.added),
+            connect_obj(self.underlying,
                 'changed', list.extend, self.changed),
-            self.underlying.connect_object(
+            connect_obj(self.underlying,
                 'removed', list.extend, self.removed),
         ]
 
@@ -735,7 +762,7 @@ class TAlbumLibrary(TestCase):
     def test_items(self):
         self.failUnlessEqual(len(self.library.items()), 3)
 
-    def test_items(self):
+    def test_items_2(self):
         albums = self.library.values()
         self.failUnlessEqual(len(albums), 3)
         songs = self.underlying._contents.values()
@@ -775,16 +802,16 @@ class TAlbumLibrarySignals(TestCase):
             received.append(name)
 
         self._sigs = [
-            lib.connect_object('added', listen, 'added'),
-            lib.connect_object('changed', listen, 'changed'),
-            lib.connect_object('removed', listen, 'removed'),
+            connect_obj(lib, 'added', listen, 'added'),
+            connect_obj(lib, 'changed', listen, 'changed'),
+            connect_obj(lib, 'removed', listen, 'removed'),
         ]
 
         albums = lib.albums
         self._asigs = [
-            albums.connect_object('added', listen, 'a_added'),
-            albums.connect_object('changed', listen, 'a_changed'),
-            albums.connect_object('removed', listen, 'a_removed'),
+            connect_obj(albums, 'added', listen, 'a_added'),
+            connect_obj(albums, 'changed', listen, 'a_changed'),
+            connect_obj(albums, 'removed', listen, 'a_removed'),
         ]
 
         self.lib = lib

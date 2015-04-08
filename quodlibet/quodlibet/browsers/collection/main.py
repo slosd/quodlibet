@@ -14,18 +14,17 @@ from quodlibet import config
 
 from quodlibet.browsers.albums import AlbumTagCompletion
 from quodlibet.browsers._base import Browser
-from quodlibet.parse import Query
+from quodlibet.query import Query
 
 from quodlibet.qltk.searchbar import SearchBarBox
 from quodlibet.qltk.songsmenu import SongsMenu
 from quodlibet.qltk.views import AllTreeView
 from quodlibet.qltk.image import (get_scale_factor, get_pbosf_for_pixbuf,
-    pbosf_get_property_name)
-from quodlibet.qltk.x import ScrolledWindow, Alignment, SymbolicIconImage
+    set_renderer_from_pbosf, scale, add_border_widget)
+from quodlibet.qltk.x import ScrolledWindow, Align, SymbolicIconImage
 from quodlibet.util.collection import Album
+from quodlibet.util import connect_obj
 from quodlibet.util.library import background_filter
-
-from quodlibet.util.thumbnails import scale
 
 from .models import (CollectionTreeStore, CollectionSortModel,
     CollectionFilterModel, MultiNode, UnknownNode)
@@ -84,7 +83,8 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
     __model = None
 
     def pack(self, songpane):
-        container = qltk.RHPaned()
+        container = qltk.ConfigRHPaned(
+            "browsers", "collectionbrowser_pos", 0.4)
         container.pack1(self, True, False)
         container.pack2(songpane, True, False)
         return container
@@ -136,7 +136,7 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
     def _change_albums(klass, library, changed, model):
         model.change_albums(changed)
 
-    def __init__(self, library, main):
+    def __init__(self, library):
         super(CollectionBrowser, self).__init__(spacing=6)
         self._register_instance()
         if self.__model is None:
@@ -204,15 +204,18 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
             else:
                 cover = get_scaled_cover(album)
                 if cover:
+                    round_ = config.getboolean("albumart", "round")
+                    cover = add_border_widget(
+                        cover, view, cell, round=round_)
                     pbosf = get_pbosf_for_pixbuf(self, cover)
-                    prop_name = pbosf_get_property_name(pbosf)
-                    cell.set_property(prop_name, pbosf)
+                    set_renderer_from_pbosf(cell, pbosf)
                 else:
                     cell.set_property('stock_id', Gtk.STOCK_CDROM)
 
         imgrender = Gtk.CellRendererPixbuf()
         render = Gtk.CellRendererText()
-        render.set_property('ellipsize', Pango.EllipsizeMode.END)
+        if view.supports_hints():
+            render.set_property('ellipsize', Pango.EllipsizeMode.END)
         column.pack_start(imgrender, False)
         column.pack_start(render, True)
         column.set_cell_data_func(render, cell_data)
@@ -232,22 +235,19 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
                               accel_group=self.accelerators)
 
         search.connect('query-changed', self.__update_filter)
+        self.__search = search
 
         hbox.pack_start(search, True, True, 0)
         hbox.pack_start(prefs, False, True, 0)
 
-        if main:
-            self.pack_start(Alignment(hbox, left=6, top=6), False, True, 0)
-        else:
-            self.pack_start(hbox, False, True, 0)
-
+        self.pack_start(Align(hbox, left=6, top=6), False, True, 0)
         self.pack_start(sw, True, True, 0)
 
         view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
         self.__sig = view.get_selection().connect('changed',
             self.__selection_changed)
-        view.connect('row-activated', self.__play, main)
-        view.connect_object('popup-menu', self.__popup, view, library)
+        view.connect('row-activated', self.__play)
+        connect_obj(view, 'popup-menu', self.__popup, view, library)
 
         targets = [("text/x-quodlibet-songs", Gtk.TargetFlags.SAME_APP, 1),
                    ("text/uri-list", 0, 2)]
@@ -311,14 +311,14 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
 
     def __popup(self, view, library):
         songs = self.__get_selected_songs(view.get_selection())
-        menu = SongsMenu(library, songs, parent=self)
+        menu = SongsMenu(library, songs)
         menu.show_all()
         return view.popup_menu(menu, 0, Gtk.get_current_event_time())
 
-    def __play(self, view, path, col, main):
+    def __play(self, view, path, col):
         model = view.get_model()
-        if main and isinstance(model[path][0], Album):
-            self.emit("activated")
+        if isinstance(model[path][0], Album):
+            self.songs_activated()
         else:
             if view.row_expanded(path):
                 view.collapse_row(path)
@@ -339,7 +339,7 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
     def __selection_changed(self, selection):
         songs = self.__get_selected_songs(False)
         if songs is not None:
-            GLib.idle_add(self.emit, 'songs-selected', songs, None)
+            GLib.idle_add(self.songs_selected, songs)
 
     def can_filter_albums(self):
         return True
@@ -350,6 +350,15 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
             self.view.select_album(albums[0], unselect=True)
         for album in albums[1:]:
             self.view.select_album(album, unselect=False)
+
+    def can_filter_text(self):
+        return True
+
+    def filter_text(self, text):
+        self.__search.set_text(text)
+        if Query.is_parsable(text):
+            self.__update_filter(self.__search, text)
+            self.activate()
 
     def unfilter(self):
         pass

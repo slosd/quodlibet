@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -7,19 +8,16 @@
 import sys
 
 from tests import TestCase
+from helper import capture_output
 
 from quodlibet.qltk.debugwindow import ExceptionDialog
 
 
 class TExceptionDialog(TestCase):
     def test_exec_hook(self):
-        old = sys.stderr
-        try:
-            sys.stderr = None
+        with capture_output():
             try:
                 raise Exception
             except Exception:
                 ExceptionDialog.from_except(*sys.exc_info())
                 ExceptionDialog.instance.destroy()
-        finally:
-            sys.stderr = old

@@ -88,6 +88,17 @@ class TID3Images(TestCase):
         self.assertTrue(song.has_images)
         self.assertEqual(song.get_primary_image().mime_type, "image/jpeg")
 
+    def test_set_image_no_tag(self):
+        f = mutagen.File(self.filename)
+        f.delete()
+        song = MP3File(self.filename)
+        fileobj = StringIO.StringIO("foo")
+        image = EmbeddedImage(fileobj, "image/jpeg", 10, 10, 8)
+        song.set_image(image)
+
+        song = MP3File(self.filename)
+        self.assertTrue(song.has_images)
+
 
 class TID3File(TestCase):
     def setUp(self):
@@ -100,19 +111,19 @@ class TID3File(TestCase):
         shutil.copy(os.path.join(DATA_DIR, 'mutagen-bug.mp3'), self.filename2)
 
     def test_optional_POPM_count(self):
-        #http://code.google.com/p/quodlibet/issues/detail?id=364
+        # https://github.com/quodlibet/quodlibet/issues/364
         f = mutagen.File(self.filename)
         f.tags.add(mutagen.id3.POPM(const.EMAIL, 42))
         try:
             f.save()
         except TypeError:
-            #http://code.google.com/p/mutagen/issues/detail?id=33
+            # https://github.com/quodlibet/quodlibet/issues/33
             pass
         else:
             MP3File(self.filename)
 
     def test_TXXX_DATE(self):
-        # http://code.google.com/p/quodlibet/issues/detail?id=220
+        # https://github.com/quodlibet/quodlibet/issues/220
         f = mutagen.File(self.filename)
         f.tags.add(mutagen.id3.TXXX(encoding=3, desc=u'DATE',
                                     text=u'2010-01-13'))
@@ -127,7 +138,7 @@ class TID3File(TestCase):
 
     def test_lang_read(self):
         """Tests reading of language from TXXX"""
-        # http://code.google.com/p/quodlibet/issues/detail?id=439
+        # https://github.com/quodlibet/quodlibet/issues/439
         f = mutagen.File(self.filename)
         try:
             lang = u'free-text'
@@ -277,7 +288,7 @@ class TID3File(TestCase):
 
     def test_foobar2k_replaygain_read_new(self):
         # Others don't like RVA2, so we have to read/write foobar style
-        # http://code.google.com/p/quodlibet/issues/detail?id=1027
+        # https://github.com/quodlibet/quodlibet/issues/1027
         f = mutagen.File(self.filename)
         f.tags.add(mutagen.id3.TXXX(encoding=3, desc="replaygain_track_gain",
                                     text=["-6 db"]))
@@ -304,7 +315,7 @@ class TID3File(TestCase):
 
     def test_foobar2k_replaygain_write_new(self):
         # Others don't like RVA2, so we have to read/write foobar style
-        # http://code.google.com/p/quodlibet/issues/detail?id=1027
+        # https://github.com/quodlibet/quodlibet/issues/1027
         song = MP3File(self.filename)
         song["replaygain_track_gain"] = "-6 db"
         song["replaygain_track_peak"] = "0.9"
@@ -417,18 +428,6 @@ class TID3File(TestCase):
         # same here, but without the TP1, so 2 values
         song = MP3File(self.filename)
         self.failUnlessEqual(len(song.list("artist")), 2)
-
-    def test_id3_bug(self):
-        # http://code.google.com/p/mutagen/issues/detail?id=97
-        tag = mutagen.id3.ID3(self.filename2)
-        self.failUnless(tag.unknown_frames)
-        version = mutagen.version
-        mutagen.version = (1, 20)
-        song = MP3File(self.filename2)
-        song.write()
-        mutagen.version = version
-        tag = mutagen.id3.ID3(self.filename2)
-        self.failIf(tag.unknown_frames)
 
     def test_encoding(self):
         song = MP3File(self.filename)

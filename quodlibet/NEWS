@@ -1,15 +1,207 @@
+3.3.1 (2015-01-10) - Reduce, reuse, recycle, RESUBMIT
+-----------------------------------------------------
+
+Regressions:
+ * Fix occasional errors when closing menus
+   (with the plugin menu in Ex Falso for example) :bug:`1515`
+ * Fix operon info :bug:`1514`
+ * Fix operon fill error in case a tag doesn't match :bug:`1520`
+
+Fixes:
+ * Fix HiDPI DnD images when dragging multiple rows
+
+
+3.3.0 (2014-12-31) - PARALLEL UNIVERSES. Travel there and THEN go back in time, and you can mess things up as much as you want.
+-------------------------------------------------------------------------------------------------------------------------------
+
+General:
+ * Support ``--query`` with all browsers that have a search entry. :bug:`1437`
+ * Songlist: Scroll to playing song when replacing the list. :bug:`568`
+ * Songlist: Scroll to first selected song and restore selection for
+   it on re-sort. :bug:`568`
+ * Consider all songs in an album for finding (embedded) album art.
+   :bug:`924`
+ * Support ``month`` (30 days) in time queries (``#(lastplayed < 1 month)``.
+   :bug:`706`
+ * Support playing a song that is not in the song list. :bug:`1358`
+ * Support numeric date search e.g. ``#(2004-01 < date < 2004-05)``
+   :bug:`1455`
+ * Playlists browser: make delete key remove the selected songs from
+   the current playlist :bug:`1481` (Nick Boultbee)
+ * File tree: Show XDG desktop/downloads/music folders if available
+ * File tree: List mountpoints on linux
+ * Show the filter menu in secondary browser windows (filter shortcuts
+   work there as well now)
+ * Add ``alt+[1-9]`` shortcut for notebook widgets to jump the a specific page
+ * Support loading ADTS/ADIF files (\*.aac). Needs mutagen 1.27.
+ * Search: New regex modifier ``"d"`` which makes all letters match
+   variants with diacritic marks (accents etc.). Enabled by default for normal
+   text searches. ``Sigur Ros`` will now find songs containing ``Sigur Rós``.
+   For regex and exact searches use ``/Sigur Ros/d`` and ``"Sigur Ros"d``
+   to enable.
+   :bug:`133`
+ * New ~people:real tag which filters out "Various Artists" values
+   (Nick Boultbee) :bug:`1034`
+ * Prefer artist over albumartist for single songs in ~people (Nick Boultbee)
+   :bug:`1034`
+
+Fixes:
+ * Update for theming changes in gtk3.15
+ * Fix seek slider not working with newer gtk+ and some themes :bug:`1477`
+ * Fix playing song not restoring on start with radio/filesystem browser
+
+Translations:
+ * Russian translation update (Anton Shestakov) :bug:`1441`
+ * Updated Greek translation (Dimitris Papageorgiou). :bug:`1491`
+
+Tagger:
+ * WMA: support multiple values for producer, conductor, artist, lyricist,
+   albumartist, composer, genre and mood (needs mutagen 1.26)
+ * APEv2: Support reading/writing embedded album art for APEv2 based formats
+   (Wavpack, Musepack, Monkey's Audio)
+ * Allow removing and renaming from tag names which not all selected
+   formats support.
+ * Allow toggling of programmatic tags in the tagging UI
+
+Plugins:
+ * Various translation related fixes (Anton Shestakov) :bug:`1442` :bug:`1445`
+ * New simple lyricwiki plugin using a WebKitGtk webview
+ * New Rhythmbox import plugin. :bug:`1463`
+ * MPD server: make work again with newer MPDroid (MPDroid crashed on start)
+ * Trayicon: add option to quit when closing the main window instead of hiding
+   :bug:`619`
+ * Theme switcher: add option to enable/disable client side decorations
+ * ReplayGain: add option to skip albums with existing ReplayGain values
+   (Nick Boultbee) :bug:`1471`
+ * Notifications: Make cover art display work under e19 :bug:`1504`
+
+Operon:
+ * new 'edit' command for editing tags with a text editor
+   (``VISUAL=vi operon edit song.flac``) :bug:`1084`
+ * new 'fill' command for filling tags using parts of the file path
+   (``operon fill --dry-run "<tracknumber>. <title>" *.flac``)
+
+OSX:
+ * Multimedia key support (Eric Le Lay)
+ * Global menu support / OSX integration. (Eric Le Lay)
+ * Various fixes / improvements
+
+Windows:
+ * Newer mutagen (1.27)
+ * Newer GTK+/Gstreamer (Tumagonx)
+ * Fix loading cover art from non-ansi paths
+ * Starting QL will now focus the first instance if one exists
+ * quodlibet.exe now passes command arguments to the running instance
+   (quodlibet.exe --next) :bug:`635`
+ * New quodlibet-cmd.exe which is the same as quodlibet.exe but
+   can be executed in the Windows console with visible stdout :bug:`635`
+
+
+3.2.2 (2014-10-03) - ENJOY, THERE'S NO GOING BACK
+-------------------------------------------------
+
+Fixes
+ * Fix a crash when seeking streams in some cases :bug:`1450`
+ * Fix a crash in case Windows Explorer favourites link to a non ASCII path :bug:`1464`
+ * Fix playback stopping when playing chained ogg streams :bug:`1454`
+ * Fix context menus not showing sometimes with GTK+3.14.1
+
+Translations
+ * Russian translation update (Anton Shestakov)
+
+
+3.2.1 (2014-08-16) - BAKE HIM AWAY, TOYS
+----------------------------------------
+
+Fixes
+ * Fix Ex Falso not starting in some cases. :bug:`1448`
+ * Album art download plugin: Fix image file extension (Nick Boultbee)
+   :bug:`1435`
+
+Translations
+ * Russian translation update (Anton Shestakov) :bug:`1441`
+
+
+3.2.0 (2014-08-01) - WHAT KIND OF GOD MADE IT SO LIONS HUG BACK TOO HARD
+------------------------------------------------------------------------
+
+Tags:
+ * ~people and ~performer don't show roles anymore, which makes them more
+   useful in the paned browser for example. Instead ~people:roles and
+   ~performer:roles will include roles and merge roles like "Artist (Role1,
+   Role2)". Furthermore composer, lyricist, arranger and conductor will be
+   merged with performer roles in ~people:roles. so "performer:role1=Foo,
+   composer=Foo" will result in "Foo (Role1, Composition)". (qjh)
+ * ~#rating in the song list is now a numeric column, ~rating shows the stars
+   (Jan Path) :bug:`1381`
+
+UI:
+ * HiDPI support (start with GDK_SCALE=2, needs cairo trunk)
+ * Various display fixes for GTK+ 3.13 and non-Adwaita based themes
+ * Seek slider width scales with song length to some extend
+ * Seek slider shows remaining time
+ * Play order plugins are now split in random/non-random and
+   the UI was replaced by a toggle button + menu. :bug:`1411`
+ * Removing of songs from a playlist through the context menu (Nick Boultbee)
+ * Song list columns now remember their width/state (qjh)
+ * Song list columns provide an option to toggle if they expand.
+ * The multi sort dialog is gone, instead it's now possible to sort
+   by multiple tags by holding down ctrl and clicking on multiple columns.
+
+Plugins:
+ * New MPD Server plugin to remote control QL, e.g. through MPDroid :bug:`1377`
+ * New acoustid.org fingerprint tagger (basic functionality, but works)
+ * "Show File" merged into "Browse Folders", it will now try to
+   select the files if the interfaces allows it.
+ * Exact rating plugin (Jan Path) :bug:`1383`
+
+Player:
+ * Improved GStreamer error reporting.
+ * Error recording is gone, since it was just annoying. :bug:`1400`
+
+Windows:
+ * Fix slow startup :bug:`1389`
+ * Windows Explorer folder context menu entry for Ex Falso
+
+Misc:
+ * Keyboard shortcuts are now documented:
+   https://quodlibet.readthedocs.org/en/latest/guide/shortcuts.html
+
+Developers:
+ * Due to the inclusion of the plugins into the core, the symlink from
+   ~/.quodlibet/plugins is no longer needed.
+
+Fixes:
+ * Fix tray icon crashing or not showing under Gnome Shell 3.12 :bug:`1429`
+
+Packaging:
+ * UDisks2 supported, in addition to UDisks1
+ * Plugins are now included in the main tarball and will be installed by
+   setup.py, the quodlibet-plugins tarball is gone. (Load path switched from
+   quodlibet/plugins to quodlibet/ext for system wide plugins, loading from
+   ~/.quodlibet/plugins is the same) :bug:`1396`
+ * For BSDs: setup.py has a new "--mandir" to select the man page location
+ * Packaging guide: https://quodlibet.readthedocs.org/en/latest/packaging.html
+
+
+3.1.91 [beta] (2014-07-22) - Pumps, powerheads, lights and filters!
+-------------------------------------------------------------------
+
+See final release
+
+
 3.1.2 (2014-06-20) - Dang it
 ----------------------------
 
-* Fix 3.1.1 regression causing folders in the file browser to show up in reverse order [1390]
+* Fix 3.1.1 regression causing folders in the file browser to show up in reverse order :bug:`1390`
 
 
 3.1.1 (2014-04-28) - I've shown that you're dealing with an Alpha here, baby, not some weak Beta!
 -------------------------------------------------------------------------------------------------
 
-* Fix a crash with GTK+ 3.12 [1384]
-* Handle invalid flac picture blocks [1385]
-* Fix "setup.py install --record" [1373]
+* Fix a crash with GTK+ 3.12 :bug:`1384`
+* Handle invalid flac picture blocks :bug:`1385`
+* Fix "setup.py install --record" :bug:`1373`
 
 
 3.1.0 (2014-04-10) - Olden times, man! NEVER LIVE THERE.
@@ -23,7 +215,7 @@
   is a portable version available.
 
   There is still an unsolved problem regarding miss-placed context menus
-  with multiple monitors [1319].
+  with multiple monitors :bug:`1319`.
 
   Thanks goes to Bakhtiar Hasmanan for providing a working PyGObject stack.
 
@@ -72,15 +264,15 @@ Other changes:
 * Added a simple GNOME app menu.
 * 'albumartist' is now used for album identification.
 * <shift>space enables "stop after the current song".
-* Warning before opening too many plugin windows (Nick Boultbee) [1231]
-* New --unqueue-all command [1234]
+* Warning before opening too many plugin windows (Nick Boultbee) :bug:`1231`
+* New --unqueue-all command :bug:`1234`
 
 Fixes:
 
-* Config gets saved atomically and handle a corrupted one [1042]
-* editing:id3encoding option was ignored [1290]
-* album browser: Fix sorting by rating [1352]
-* search: Fix results for "&(foo, !bar)" [1327]
+* Config gets saved atomically and handle a corrupted one :bug:`1042`
+* editing:id3encoding option was ignored :bug:`1290`
+* album browser: Fix sorting by rating :bug:`1352`
+* search: Fix results for "&(foo, !bar)" :bug:`1327`
 * Various crashes caused by code not being ported to PyGObject properly.
 
 Dependencies & Packaging:

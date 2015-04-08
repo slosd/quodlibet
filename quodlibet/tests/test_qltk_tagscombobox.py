@@ -1,6 +1,7 @@
-from tests import TestCase, AbstractTestCase, skipIf
+# -*- coding: utf-8 -*-
+from tests import AbstractTestCase, skipIf
 
-from quodlibet.formats import USEFUL_TAGS
+from quodlibet.util.tags import USER_TAGS
 from quodlibet.qltk import is_wayland
 
 
@@ -17,7 +18,7 @@ class TagsCombo(AbstractTestCase):
         self.failUnlessEqual(self.some.tag, "foobar")
 
     def test_all(self):
-        tags = list(USEFUL_TAGS)
+        tags = list(USER_TAGS)
         tags.sort()
         for i, value in enumerate(tags):
             self.all.set_active(i)
@@ -31,11 +32,13 @@ class TagsCombo(AbstractTestCase):
 @skipIf(is_wayland(), "crashes..")
 class TTagsComboBox(TagsCombo):
     from quodlibet.qltk.tagscombobox import TagsComboBox as Kind
+    Kind
 
 
 @skipIf(is_wayland(), "crashes..")
 class TTagsComboBoxEntry(TagsCombo):
     from quodlibet.qltk.tagscombobox import TagsComboBoxEntry as Kind
+    Kind
 
     def test_custom(self):
         self.all.get_child().set_text("a new tag")

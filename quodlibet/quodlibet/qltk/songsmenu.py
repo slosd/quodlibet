@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006 Joe Wreschnig
 #      2013-2014 Nick Boultbee
 #
@@ -6,30 +7,97 @@
 # published by the Free Software Foundation
 
 from gi.repository import Gtk
-from quodlibet.qltk.msg import confirm_action
 
 from quodlibet import qltk
 
 from quodlibet.util import print_exc
+from quodlibet.qltk.msg import WarningMessage
 from quodlibet.qltk.delete import TrashMenuItem, trash_songs
 from quodlibet.qltk.information import Information
 from quodlibet.qltk.properties import SongProperties
-from quodlibet.qltk.x import SeparatorMenuItem
+from quodlibet.qltk.x import SeparatorMenuItem, Button
+from quodlibet.qltk.ratingsmenu import RatingsMenuItem
+from quodlibet.qltk import get_top_parent, get_menu_item_top_parent
 from quodlibet.plugins import PluginManager, PluginHandler
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 from quodlibet.util.songwrapper import ListWrapper, check_wrapper_changed
 
 
+class ConfirmMultiSongInvoke(WarningMessage):
+    """Dialog to confirm invoking a plugin with X songs in case X is high"""
+
+    RESPONSE_INVOKE = 1
+
+    def __init__(self, parent, plugin_name, count):
+        title = ngettext("Run the plugin \"%(name)s\" on %(count)d song?",
+                         "Run the plugin \"%(name)s\" on %(count)d songs?",
+                         count) % {"name": plugin_name, "count": count}
+
+        super(ConfirmMultiSongInvoke, self).__init__(
+            get_top_parent(parent),
+            title, "",
+            buttons=Gtk.ButtonsType.NONE)
+
+        self.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        delete_button = Button(_("_Run Plugin"), Gtk.STOCK_EXECUTE)
+        delete_button.show()
+        self.add_action_widget(delete_button, self.RESPONSE_INVOKE)
+        self.set_default_response(Gtk.ResponseType.CANCEL)
+
+    @classmethod
+    def confirm(cls, parent, plugin_name, count):
+        """Returns if the action was confirmed"""
+
+        resp = cls(parent, plugin_name, count).run()
+        return resp == cls.RESPONSE_INVOKE
+
+
+class ConfirmMultiAlbumInvoke(WarningMessage):
+    """Dialog to confirm invoking a plugin with X albums in case X is high"""
+
+    RESPONSE_INVOKE = 1
+
+    def __init__(self, parent, plugin_name, count):
+        title = ngettext("Run the plugin \"%(name)s\" on %(count)d album?",
+                         "Run the plugin \"%(name)s\" on %(count)d albums?",
+                         count) % (plugin_name, count)
+
+        super(ConfirmMultiAlbumInvoke, self).__init__(
+            get_top_parent(parent),
+            title, "",
+            buttons=Gtk.ButtonsType.NONE)
+
+        self.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        delete_button = Button(_("_Run Plugin"), Gtk.STOCK_EXECUTE)
+        delete_button.show()
+        self.add_action_widget(delete_button, self.RESPONSE_INVOKE)
+        self.set_default_response(Gtk.ResponseType.CANCEL)
+
+    @classmethod
+    def confirm(cls, parent, plugin_name, count):
+        """Returns if the action was confirmed"""
+
+        resp = cls(parent, plugin_name, count).run()
+        return resp == cls.RESPONSE_INVOKE
+
+
 class SongsMenuPluginHandler(PluginHandler):
 
-    def __init__(self, confirmer):
-        self.__plugins = []
-        # The method to call for confirmations of risky multi-invocations
-        self.confirm_multiple = confirmer
+    def __init__(self, song_confirmer=None, album_confirmer=None):
+        """custom confirmers for testing"""
 
-    def Menu(self, library, parent, songs):
+        self.__plugins = []
+
+        self._confirm_multiple_songs = ConfirmMultiSongInvoke.confirm
+        if song_confirmer is not None:
+            self._confirm_multiple_songs = song_confirmer
+
+        self._confirm_multiple_albums = ConfirmMultiAlbumInvoke.confirm
+        if album_confirmer is not None:
+            self._confirm_multiple_albums = album_confirmer
+
+    def Menu(self, library, songs):
         songs = ListWrapper(songs)
-        parent = qltk.get_top_parent(parent)
 
         attrs = ['plugin_song', 'plugin_songs',
                  'plugin_album', 'plugin_albums']
@@ -52,7 +120,7 @@ class SongsMenuPluginHandler(PluginHandler):
             usable = max([callable(getattr(Kind, s)) for s in attrs])
             if usable:
                 try:
-                    items.append(Kind(songs, library, parent))
+                    items.append(Kind(songs, library))
                 except:
                     print_e("Couldn't initialise song plugin %s. Stack trace:"
                             % Kind)
@@ -64,13 +132,14 @@ class SongsMenuPluginHandler(PluginHandler):
             for item in items:
                 try:
                     menu.append(item)
-                    args = (library, parent, songs)
+                    args = (library, songs)
                     if item.get_submenu():
                         for subitem in item.get_submenu().get_children():
-                            subitem.connect_object(
-                                'activate', self.__handle, item, *args)
+                            subitem.connect(
+                                'activate', self.__on_activate, item, *args)
                     else:
-                        item.connect('activate', self.__handle, *args)
+                        item.connect(
+                            'activate', self.__on_activate, item, *args)
                 except:
                     print_exc()
                     item.destroy()
@@ -95,18 +164,24 @@ class SongsMenuPluginHandler(PluginHandler):
     def handle(self, plugin_id, library, parent, songs):
         """Start a song menu plugin directly without a menu"""
 
+        parent = get_top_parent(parent)
+
         for plugin in self.__plugins:
             if plugin.PLUGIN_ID == plugin_id:
                 songs = ListWrapper(songs)
                 try:
-                    plugin = plugin(songs, library, parent)
+                    plugin = plugin(songs, library)
                 except Exception:
                     print_exc()
                 else:
-                    self.__handle(plugin, library, parent, songs)
+                    self.__handle(plugin, plugin, library, songs, parent)
                 return
 
-    def __handle(self, plugin, library, parent, songs):
+    def __on_activate(self, item, plugin, library, songs):
+        parent = get_menu_item_top_parent(item)
+        self.__handle(item, plugin, library, songs, parent)
+
+    def __handle(self, item, plugin, library, songs, parent):
         if len(songs) == 0:
             return
 
@@ -122,13 +197,10 @@ class SongsMenuPluginHandler(PluginHandler):
             if callable(plugin.plugin_song):
                 total = len(songs)
                 if total > plugin.MAX_INVOCATIONS:
-                    msg = ngettext("Are you sure you want to run "
-                                       "the \"%s\" plugin on %d song?",
-                                   "Are you sure you want to run "
-                                       "the \"%s\" plugin on %d songs?",
-                                   total) % (plugin.PLUGIN_ID, total)
-                    if not self.confirm_multiple(msg):
+                    if not self._confirm_multiple_songs(
+                            parent, plugin.PLUGIN_NAME, total):
                         return
+
                 try:
                     ret = map(plugin.plugin_song, songs)
                 except Exception:
@@ -149,12 +221,8 @@ class SongsMenuPluginHandler(PluginHandler):
                 albums = self.__get_albums(songs)
                 total = len(albums)
                 if total > plugin.MAX_INVOCATIONS:
-                    msg = ngettext("Are you sure you want to run "
-                                       "the \"%s\" plugin on %d album?",
-                                   "Are you sure you want to run "
-                                       "the \"%s\" plugin on %d albums?",
-                                   total) % (plugin.PLUGIN_ID, total)
-                    if not self.confirm_multiple(msg):
+                    if not self._confirm_multiple_albums(
+                            parent, plugin.PLUGIN_NAME, total):
                         return
 
             if callable(plugin.plugin_single_album) and len(albums) == 1:
@@ -196,7 +264,7 @@ class SongsMenuPluginHandler(PluginHandler):
 
 
 class SongsMenu(Gtk.Menu):
-    plugins = SongsMenuPluginHandler(confirm_action)
+    plugins = SongsMenuPluginHandler()
 
     @classmethod
     def init_plugins(cls):
@@ -204,17 +272,31 @@ class SongsMenu(Gtk.Menu):
 
     def __init__(self, library, songs, plugins=True, playlists=True,
                  queue=True, devices=True, remove=True, delete=False,
-                 edit=True, parent=None):
+                 edit=True, ratings=True, items=None, accels=True):
         super(SongsMenu, self).__init__()
 
         # The library may actually be a librarian; if it is, use it,
         # otherwise find the real librarian.
         librarian = getattr(library, 'librarian', library)
 
+        if ratings:
+            ratings_item = RatingsMenuItem(songs, librarian)
+            ratings_item.set_sensitive(bool(songs))
+            self.append(ratings_item)
+            self.separate()
+
+        # external item groups
+        for subitems in reversed(items or []):
+            self.separate()
+            for item in subitems:
+                self.append(item)
+            self.separate()
+
         if plugins:
-            submenu = self.plugins.Menu(librarian, parent, songs)
+            submenu = self.plugins.Menu(librarian, songs)
             if submenu is not None:
                 b = qltk.MenuItem(_("_Plugins"), Gtk.STOCK_EXECUTE)
+                b.set_sensitive(bool(songs))
                 self.append(b)
                 b.set_submenu(submenu)
                 self.append(SeparatorMenuItem())
@@ -230,8 +312,6 @@ class SongsMenu(Gtk.Menu):
             if not song.is_file:
                 is_file = False
 
-        self.separate()
-
         if playlists:
             # Needed here to avoid a circular import; most browsers use
             # a SongsMenu, but SongsMenu needs access to the playlist
@@ -241,20 +321,28 @@ class SongsMenu(Gtk.Menu):
             # some kind of inversion of control here.
             from quodlibet.browsers.playlists.menu import PlaylistMenu
             try:
-                submenu = PlaylistMenu(songs, parent)
+                submenu = PlaylistMenu(songs)
             except AttributeError as e:
                 print_w("Couldn't get Playlists menu: %s" % e)
             else:
                 b = qltk.MenuItem(_("Play_lists"), Gtk.STOCK_ADD)
-                b.set_sensitive(can_add)
+                b.set_sensitive(can_add and bool(songs))
                 b.set_submenu(submenu)
                 self.append(b)
         if queue:
             b = qltk.MenuItem(_("Add to _Queue"), Gtk.STOCK_ADD)
-            b.connect('activate', self.__enqueue, songs)
-            qltk.add_fake_accel(b, "<ctrl>Return")
+
+            def enqueue_cb(item, songs):
+                songs = filter(lambda s: s.can_add, songs)
+                if songs:
+                    from quodlibet import app
+                    app.window.playlist.enqueue(songs)
+
+            b.connect('activate', enqueue_cb, songs)
+            if accels:
+                qltk.add_fake_accel(b, "<ctrl>Return")
             self.append(b)
-            b.set_sensitive(can_add)
+            b.set_sensitive(can_add and bool(songs))
 
         if devices:
             from quodlibet import browsers
@@ -266,7 +354,8 @@ class SongsMenu(Gtk.Menu):
                 if browsers.media.MediaDevices in browsers.browsers:
                     submenu = browsers.media.Menu(songs, library)
                     b = qltk.MenuItem(_("_Copy to Device"), Gtk.STOCK_COPY)
-                    b.set_sensitive(can_add and len(submenu) > 0)
+                    b.set_sensitive(
+                        can_add and len(submenu) > 0 and bool(songs))
                     b.set_submenu(submenu)
                     self.append(b)
 
@@ -276,29 +365,39 @@ class SongsMenu(Gtk.Menu):
         if remove:
             b = qltk.MenuItem(_("_Remove from library"), Gtk.STOCK_REMOVE)
             if callable(remove):
-                b.connect_object('activate', remove, songs)
+                b.connect('activate', lambda item: remove(songs))
             else:
-                b.connect('activate', self.__remove, songs, library)
-                b.set_sensitive(in_lib)
+                def remove_cb(item, songs, library):
+                    library.remove(set(songs))
+
+                b.connect('activate', remove_cb, songs, library)
+                b.set_sensitive(in_lib and bool(songs))
             self.append(b)
 
         if delete:
             if callable(delete):
                 b = Gtk.ImageMenuItem(Gtk.STOCK_DELETE, use_stock=True)
-                b.connect_object('activate', delete, songs)
+                b.connect('activate', lambda item: delete(songs))
             else:
                 b = TrashMenuItem()
-                b.connect_object('activate', trash_songs,
-                                 parent, songs, librarian)
-                b.set_sensitive(is_file)
+
+                def trash_cb(item):
+                    parent = get_menu_item_top_parent(item)
+                    trash_songs(parent, songs, librarian)
+
+                b.connect('activate', trash_cb)
+                b.set_sensitive(is_file and bool(songs))
             self.append(b)
 
         if edit:
             self.separate()
             b = qltk.MenuItem(_("Edit _Tags"), Gtk.STOCK_PROPERTIES)
-            qltk.add_fake_accel(b, "<alt>Return")
+            b.set_sensitive(bool(songs))
+            if accels:
+                qltk.add_fake_accel(b, "<alt>Return")
 
             def song_properties_cb(menu_item):
+                parent = get_menu_item_top_parent(menu_item)
                 window = SongProperties(librarian, songs, parent)
                 window.show()
 
@@ -306,15 +405,21 @@ class SongsMenu(Gtk.Menu):
             self.append(b)
 
             b = Gtk.ImageMenuItem(label=Gtk.STOCK_INFO, use_stock=True)
-            qltk.add_fake_accel(b, "<ctrl>I")
+            b.set_sensitive(bool(songs))
+            if accels:
+                qltk.add_fake_accel(b, "<ctrl>I")
 
             def information_cb(menu_item):
+                parent = get_menu_item_top_parent(menu_item)
                 window = Information(librarian, songs, parent)
                 window.show()
             b.connect('activate', information_cb)
             self.append(b)
 
-        self.connect_object('selection-done', Gtk.Menu.destroy, self)
+        def selection_done_cb(menu):
+            menu.destroy()
+
+        self.connect('selection-done', selection_done_cb)
 
     def separate(self):
         if not self.get_children():
@@ -327,12 +432,3 @@ class SongsMenu(Gtk.Menu):
             return
         elif not isinstance(self.get_children()[0], Gtk.SeparatorMenuItem):
             self.prepend(SeparatorMenuItem())
-
-    def __remove(self, item, songs, library):
-        library.remove(set(songs))
-
-    def __enqueue(self, item, songs):
-        songs = filter(lambda s: s.can_add, songs)
-        if songs:
-            from quodlibet import app
-            app.window.playlist.enqueue(songs)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright 2004-2005 Joe Wreschnig, Michael Urman
-#           2012-2013 Nick Boultbee
+#           2012-2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -13,58 +13,46 @@
 import os
 import shutil
 import time
-import re
-import collections
 
 from ._image import ImageContainer
 
 from quodlibet import const
 from quodlibet import util
 from quodlibet import config
-from quodlibet.util.path import mkdir, fsdecode, fsencode, mtime, expanduser
-from quodlibet.util.path import normalize_path
+from quodlibet.util.path import mkdir, fsdecode, mtime, expanduser, is_fsnative
+from quodlibet.util.path import normalize_path, fsnative, escape_filename
 from quodlibet.util.string import encode
 
 from quodlibet.util.uri import URI
-from quodlibet.util import human_sort_key as human
-from quodlibet.util.dprint import print_d, print_w
+from quodlibet.util import human_sort_key as human, capitalize
 
-from quodlibet.util.cover.manager import cover_plugins
-
-# Used by __init__.py
-from quodlibet.util.tags import STANDARD_TAGS as USEFUL_TAGS
-from quodlibet.util.tags import MACHINE_TAGS
+from quodlibet.util.tags import TAG_ROLES, TAG_TO_SORT
 
 
-MIGRATE = frozenset(("~#playcount ~#laststarted ~#lastplayed ~#added "
-           "~#skipcount ~#rating ~bookmark").split())
+MIGRATE = set(["~#playcount", "~#laststarted", "~#lastplayed", "~#added",
+               "~#skipcount", "~#rating", "~bookmark"])
+"""These get migrated if a song gets reloaded"""
 
-PEOPLE = ("albumartist artist author composer ~performers originalartist "
-          "lyricist arranger conductor").split()
+PEOPLE = ["artist", "albumartist", "author", "composer", "~performers",
+          "originalartist", "lyricist", "arranger", "conductor"]
+"""Sources of the ~people tag, most important first"""
 
-TAG_ROLES = {
-    "composer": _("Composition"),
-    "lyricist": _("Lyrics"),
-    "arranger": _("Arrangement"),
-    "conductor": _("Conducting")
-}
+INTERN_NUM_DEFAULT = set(
+    ["~#lastplayed", "~#laststarted", "~#playcount",
+     "~#skipcount", "~#length", "~#bitrate", "~#filesize"])
+"""Default to 0"""
 
-TAG_TO_SORT = {
-    "artist": "artistsort",
-    "album": "albumsort",
-    "albumartist": "albumartistsort",
-    "performer": "performersort",
-    "~performers": "~performerssort"
-}
-
-INTERN_NUM_DEFAULT = frozenset("~#lastplayed ~#laststarted ~#playcount "
-    "~#skipcount ~#length ~#bitrate ~#filesize".split())
+FILESYSTEM_TAGS = set(["~filename", "~basename", "~dirname"])
+"""Values are bytes in Linux instead of unicode"""
 
 SORT_TO_TAG = dict([(v, k) for (k, v) in TAG_TO_SORT.iteritems()])
+"""Reverse map, so sort tags can fall back to the normal ones"""
 
 PEOPLE_SORT = [TAG_TO_SORT.get(k, k) for k in PEOPLE]
+"""Sources for ~peoplesort, most important first"""
 
-FILESYSTEM_TAGS = "~filename ~basename ~dirname".split()
+VARIOUS_ARTISTS_VALUES = 'V.A.', 'various artists', 'Various Artists'
+"""Values for ~people representing lots of people, most important last"""
 
 
 class AudioFile(dict, ImageContainer):
@@ -77,6 +65,8 @@ class AudioFile(dict, ImageContainer):
 
     # New tags received from the backend will update the song
     fill_metadata = False
+    # New song duration from the backend will update the song
+    fill_length = False
     # Container for multiple songs, while played new songs can start/end
     multisong = False
     # Part of a multisong
@@ -85,13 +75,10 @@ class AudioFile(dict, ImageContainer):
     can_add = True
     # Is a real file
     is_file = True
-    # Multiple tags for the same tag possible
-    multiple_values = True
 
     format = "Unknown Audio File"
     mimes = []
 
-    @util.cached_property
     def __song_key(self):
         return (self("~#disc"), self("~#track"),
             human(self("artistsort")),
@@ -108,7 +95,7 @@ class AudioFile(dict, ImageContainer):
 
     @util.cached_property
     def sort_key(self):
-        return [self.album_key, self.__song_key]
+        return [self.album_key, self.__song_key()]
 
     @staticmethod
     def sort_by_func(tag):
@@ -142,7 +129,6 @@ class AudioFile(dict, ImageContainer):
         pop = self.__dict__.pop
         pop("album_key", None)
         pop("sort_key", None)
-        pop("__song_key", None)
 
     def __delitem__(self, key):
         dict.__delitem__(self, key)
@@ -151,7 +137,6 @@ class AudioFile(dict, ImageContainer):
         pop = self.__dict__.pop
         pop("album_key", None)
         pop("sort_key", None)
-        pop("__song_key", None)
 
     @property
     def key(self):
@@ -203,6 +188,24 @@ class AudioFile(dict, ImageContainer):
 
         return filter(lambda s: s[:1] != "~", self.keys())
 
+    def prefixkeys(self, prefix):
+        """Returns a list of dict keys that either match prefix or start
+        with prefix + ':'.
+        """
+
+        l = []
+        for k in self:
+            if k.startswith(prefix):
+                if k == prefix or k.startswith(prefix + ":"):
+                    l.append(k)
+        return l
+
+    def _prefixvalue(self, tag):
+        return "\n".join(self.list_unique(sorted(self.prefixkeys(tag))))
+
+    def iterrealitems(self):
+        return ((k, v) for (k, v) in self.iteritems() if k[:1] != "~")
+
     def __call__(self, key, default=u"", connector=" - "):
         """Return a key, synthesizing it if necessary. A default value
         may be given (like dict.get); the default default is an empty
@@ -212,7 +215,6 @@ class AudioFile(dict, ImageContainer):
         argument may be used to specify what it is tied with.
 
         For details on tied tags, see the documentation for util.tagsplit."""
-
         if key[:1] == "~":
             key = key[1:]
             if "~" in key:
@@ -239,34 +241,42 @@ class AudioFile(dict, ImageContainer):
                 if length is None:
                     return default
                 else:
-                    return util.format_time(length)
+                    return util.format_time_display(length)
             elif key == "#rating":
                 return dict.get(self, "~" + key, config.RATINGS.default)
             elif key == "rating":
                 return util.format_rating(self("~#rating"))
-            elif key == "people" or key == "people:roles":
-                return (self._role_call(key, PEOPLE, "performer", True)
+            elif key == "people":
+                return "\n".join(self.list_unique(PEOPLE)) or default
+            elif key == "people:real":
+                # Issue 1034: Allow removal of V.A. if others exist.
+                unique = self.list_unique(PEOPLE)
+                # Order is important, for (unlikely case): multiple removals
+                for val in VARIOUS_ARTISTS_VALUES:
+                    if len(unique) > 1 and val in unique:
+                        unique.remove(val)
+                return "\n".join(unique) or default
+            elif key == "people:roles":
+                return (self._role_call("performer", PEOPLE)
                         or default)
-            elif key == "peoplesort" or key == "peoplesort:roles":
+            elif key == "peoplesort":
+                return ("\n".join(self.list_unique(PEOPLE_SORT)) or
+                        self("~people", default, connector))
+            elif key == "peoplesort:roles":
                 # Ignores non-sort tags if there are any sort tags (e.g. just
                 # returns "B" for {artist=A, performersort=B}).
                 # TODO: figure out the "correct" behavior for mixed sort tags
-                return (self._role_call(key, PEOPLE_SORT, "performersort",
-                                        True)
-                        or self("~" + key.replace("sort", ""),
-                                default, connector))
-            elif (key == "performers" or key == "performer" or
-                    key == "performers:roles" or key == "performer:roles"):
-                return (self._role_call(key,
-                                        prefixed("performer", self.keys()),
-                                        "performer")
-                        or default)
-            elif (key == "performerssort" or key == "performersort" or
-                  key == "performerssort:roles" or
-                  key == "performersort:roles"):
-                return (self._role_call(key,
-                                        prefixed("performersort", self.keys()),
-                                        "performersort")
+                return (self._role_call("performersort", PEOPLE_SORT)
+                        or self("~peoplesort", default, connector))
+            elif key in ("performers", "performer"):
+                return self._prefixvalue("performer") or default
+            elif key in ("performerssort", "performersort"):
+                return (self._prefixvalue("performersort") or
+                        self("~" + key[-4:], default, connector))
+            elif key in ("performers:roles", "performer:roles"):
+                return (self._role_call("performer") or default)
+            elif key in ("performerssort:roles", "performersort:roles"):
+                return (self._role_call("performersort")
                         or self("~" + key.replace("sort", ""), default,
                                 connector))
             elif key == "basename":
@@ -280,6 +290,11 @@ class AudioFile(dict, ImageContainer):
                     return URI.frompath(self["~filename"])
             elif key == "format":
                 return self.get("~format", self.format)
+            elif key == "#date":
+                date = self.get("date")
+                if date is None:
+                    return default
+                return util.date_key(date)
             elif key == "year":
                 return self.get("date", default)[:4]
             elif key == "#year":
@@ -361,51 +376,56 @@ class AudioFile(dict, ImageContainer):
                 key = SORT_TO_TAG[key]
         return dict.get(self, key, default)
 
-    def _roles(self, tag):
-        """Returns a defaultdict of name => [role, ...]."""
-        roles = collections.defaultdict(list)
-        for key in self.keys():
-            if key.startswith(tag + ":"):
-                role = util.title(key[1 + len(tag):])
+    def _role_call(self, role_tag, sub_keys=None):
+        role_tag_keys = self.prefixkeys(role_tag)
+
+        role_map = {}
+        for key in role_tag_keys:
+            if key != role_tag:
+                role = key.rsplit(":", 1)[-1]
                 for name in self.list(key):
-                    roles[name].append(role)
-        for name in self.list(tag):
-            roles[name]
-        return roles
+                    role_map.setdefault(name, []).append(role)
 
-    def _role_call(self, key, sub_keys, role_tag, use_pseudo_roles=False):
-        """Used to implement __call__ for a synthetic key with role support."""
-        names = []
-        names_seen = set()
-        for sub_key in sub_keys:
-            for value in self.list(sub_key):
-                if value not in names_seen:
-                    names_seen.add(value)
-                    names.append(value)
-
-        not_role_tag = lambda t: t != role_tag and t != '~' + role_tag
-        if key.endswith(":roles"):
-            roles = self._roles(role_tag)
-            if use_pseudo_roles:
-                for tag in filter(not_role_tag, sub_keys):
-                    for name in self.list(tag):
-                        if tag in TAG_ROLES:
-                            roles[name].append(TAG_ROLES[tag])
-                        else:
-                            roles[name]
-            return "\n".join(role_desc(n, roles[n]) for n in names)
+        if sub_keys is None:
+            names = self.list_unique(role_tag_keys)
         else:
-            return "\n".join(names)
+            names = self.list_unique(sub_keys)
+            for tag in sub_keys:
+                if tag in TAG_ROLES:
+                    for name in self.list(tag):
+                        role_map.setdefault(name, []).append(TAG_ROLES[tag])
+
+        descs = []
+        for name in names:
+            roles = role_map.get(name, [])
+            if not roles:
+                descs.append(name)
+            else:
+                roles = sorted(map(capitalize, roles))
+                descs.append("%s (%s)" % (name, ", ".join(roles)))
+
+        return "\n".join(descs)
 
     @property
     def lyric_filename(self):
         """Returns the (potential) lyrics filename for this file"""
-        # TODO: Use better filesystem sanitisation for lyrics file path.
-        filename = self.comma("title").replace('/', '')[:128] + '.lyric'
+
+        filename = self.comma("title").replace(u'/', u'')[:128] + u'.lyric'
         sub_dir = ((self.comma("lyricist") or self.comma("artist"))
-                  .replace('/', '')[:128])
-        path = os.path.join(expanduser("~/.lyrics"), sub_dir, filename)
-        return fsencode(path)
+                  .replace(u'/', u'')[:128])
+
+        if os.name == "nt":
+            # this was added at a later point. only use escape_filename here
+            # to keep the linux case the same as before
+            filename = escape_filename(filename)
+            sub_dir = escape_filename(sub_dir)
+        else:
+            filename = fsnative(filename)
+            sub_dir = fsnative(sub_dir)
+
+        path = os.path.join(
+            expanduser(fsnative(u"~/.lyrics")), sub_dir, filename)
+        return path
 
     def comma(self, key):
         """Get all values of a tag, separated by commas. Synthetic
@@ -455,6 +475,20 @@ class AudioFile(dict, ImageContainer):
         else:
             return self.list(key)
 
+    def list_unique(self, keys):
+        """Returns a combined value of all values in keys; duplicate values
+        will be ignored.
+        """
+
+        l = []
+        seen = set()
+        for k in keys:
+            for v in self.list(k):
+                if v not in seen:
+                    l.append(v)
+                    seen.add(v)
+        return l
+
     def as_lowercased(self):
         """Returns a new AudioFile with all keys lowercased / values merged.
 
@@ -490,20 +524,26 @@ class AudioFile(dict, ImageContainer):
         the file is not on a disk."""
         return os.path.ismount(self.get("~mountpoint", "/"))
 
+    def can_multiple_values(self, key=None):
+        """If no arguments are given, return a list of tags that can
+        have multiple values, or True if 'any' tags can.
+        """
+
+        return True
+
     def can_change(self, k=None):
         """See if this file supports changing the given tag. This may
-        be a limitation of the file type, or the file may not be
-        writable.
+        be a limitation of the file type or QL's design.
+
+        The writing code should handle all kinds of keys, so this is
+        just a suggestion.
 
         If no arguments are given, return a list of tags that can be
         changed, or True if 'any' tags can be changed (specific tags
         should be checked before adding)."""
 
         if k is None:
-            if os.access(self["~filename"], os.W_OK):
-                return True
-            else:
-                return []
+            return True
 
         try:
             if isinstance(k, unicode):
@@ -513,8 +553,13 @@ class AudioFile(dict, ImageContainer):
         except UnicodeError:
             return False
 
-        return (k and "=" not in k and "~" not in k
-                and os.access(self["~filename"], os.W_OK))
+        if not k or "=" in k or "~" in k:
+            return False
+
+        return True
+
+    def is_writable(self):
+        return os.access(self["~filename"], os.W_OK)
 
     def rename(self, newname):
         """Rename a file. Errors are not handled. This shouldn't be used
@@ -577,6 +622,9 @@ class AudioFile(dict, ImageContainer):
             self["~filename"] = filename
         elif "~filename" not in self:
             raise ValueError("Unknown filename!")
+
+        assert is_fsnative(self["~filename"])
+
         if self.is_file:
             self["~filename"] = normalize_path(
                 self["~filename"], canonicalise=True)
@@ -590,7 +638,7 @@ class AudioFile(dict, ImageContainer):
                 if os.path.ismount(head):
                     self["~mountpoint"] = head
         else:
-            self["~mountpoint"] = "/"
+            self["~mountpoint"] = fsnative(u"/")
 
         # Fill in necessary values.
         self.setdefault("~#added", int(time.time()))
@@ -694,11 +742,6 @@ class AudioFile(dict, ImageContainer):
                 if key in self:
                     del(self[key])
 
-    def find_cover(self):
-        """Return a file-like containing cover image data, or None if
-        no cover is available."""
-        return cover_plugins.acquire_cover_sync(self)
-
     def replay_gain(self, profiles, pre_amp_gain=0, fallback_gain=0):
         """Return the computed Replay Gain scale factor.
 
@@ -723,13 +766,26 @@ class AudioFile(dict, ImageContainer):
                     scale = 1.0 / peak  # don't clip
                 return min(15, scale)
         else:
-            return min(15, 10. ** ((fallback_gain + pre_amp_gain) / 20))
+            scale = 10. ** ((fallback_gain + pre_amp_gain) / 20)
+            if scale > 1:
+                scale = 1.0  # don't clip
+            return min(15, scale)
 
     def write(self):
         """Write metadata back to the file."""
         raise NotImplementedError
 
-    def __get_bookmarks(self):
+    @property
+    def bookmarks(self):
+        """Parse and return song position bookmarks, or set them.
+        Accessing this returns a copy, so song.bookmarks.append(...)
+        will not work; you need to do
+
+            marks = song.bookmarks
+            marks.append(...)
+            song.bookmarks = marks
+        """
+
         marks = []
         invalid = []
         for line in self.list("~bookmark"):
@@ -751,7 +807,8 @@ class AudioFile(dict, ImageContainer):
         marks.extend(invalid)
         return marks
 
-    def __set_bookmarks(self, marks):
+    @bookmarks.setter
+    def bookmarks(self, marks):
         result = []
         for time_, mark in marks:
             if time_ < 0:
@@ -763,15 +820,6 @@ class AudioFile(dict, ImageContainer):
         elif "~bookmark" in self:
             del(self["~bookmark"])
 
-    bookmarks = property(
-        __get_bookmarks, __set_bookmarks,
-        doc="""Parse and return song position bookmarks, or set them.
-        Accessing this returns a copy, so song.bookmarks.append(...)
-        will not work; you need to do
-           marks = song.bookmarks
-           marks.append(...)
-           song.bookmarks = marks""")
-
 
 # Looks like the real thing.
 DUMMY_SONG = AudioFile({
@@ -780,11 +828,3 @@ DUMMY_SONG = AudioFile({
     'title': 'First Track', 'tracknumber': 1,
     'date': '2010-12-31',
 })
-
-
-def role_desc(name, roles):
-    return name if not roles else "%s (%s)" % (name, ", ".join(sorted(roles)))
-
-
-def prefixed(prefix, strings):
-    return filter(lambda s: s == prefix or s.startswith(prefix + ":"), strings)

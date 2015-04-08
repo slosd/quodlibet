@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Eduardo Gonzalez, Joe Wreschnig
 #
 # This program is free software; you can redistribute it and/or modify
@@ -18,6 +19,7 @@ from gi.repository import Gtk, GLib
 from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
+from quodlibet.util import connect_obj
 
 
 class LyricsPane(Gtk.VBox):
@@ -65,7 +67,7 @@ class LyricsPane(Gtk.VBox):
             #                  "for lyrics online.  You can also enter them "
             #                  "yourself and click save."))
             buffer.set_text(_("No lyrics found for this song."))
-        buffer.connect_object('changed', save.set_sensitive, True)
+        connect_obj(buffer, 'changed', save.set_sensitive, True)
 
     def __add(self, add, song):
         artist = song.comma('artist').encode('utf-8')
@@ -73,7 +75,7 @@ class LyricsPane(Gtk.VBox):
         util.website("http://lyricwiki.org/%s" % (urllib.quote(artist)))
 
     def __refresh(self, refresh, add, buffer, song):
-        buffer.set_text(_("Searching for lyrics..."))
+        buffer.set_text(_(u"Searching for lyrics…"))
         refresh.set_sensitive(False)
         thread = threading.Thread(
             target=self.__search, args=(song, buffer, refresh, add))

@@ -1,9 +1,12 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
+#           2015 Anton Shestakov
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
+import os
 import contextlib
 import StringIO
 import sys
@@ -182,6 +185,20 @@ def visible(widget, width=None, height=None):
 
 
 @contextlib.contextmanager
+def preserve_environ():
+    old = os.environ.copy()
+    yield
+    # don't touch existing values as os.environ is broken for empty
+    # keys on Windows: http://bugs.python.org/issue20658
+    for key, value in os.environ.items():
+        if key not in old:
+            del os.environ[key]
+    for key, value in old.items():
+        if key not in os.environ or os.environ[key] != value:
+            os.environ[key] = value
+
+
+@contextlib.contextmanager
 def capture_output():
     """
     with capture_output as (stdout, stderr):
@@ -201,3 +218,54 @@ def capture_output():
     finally:
         sys.stderr = old_err
         sys.stdout = old_out
+
+
+@contextlib.contextmanager
+def temp_filename(*args, **kwargs):
+    """Creates an empty file and removes it when done.
+
+        with temp_filename() as filename:
+            with open(filename) as h:
+                h.write("foo")
+            do_stuff(filename)
+    """
+
+    from tests import mkstemp
+
+    fd, filename = mkstemp(*args, **kwargs)
+    os.close(fd)
+
+    yield filename
+
+    os.remove(filename)
+
+
+class ListWithUnused(object):
+    """ This class stores a set of elements and provides the interface to check
+        if it contains an arbitrary element, and then to know if some of the
+        elements stored were never accessed.
+
+        Some tests use this class to store whitelisted/blacklisted things that
+        are deemed acceptable, but would trigger those tests if they weren't
+        made special cases (e.g.  UI messages that conform to a particular
+        writing style, but can't be tested automatically). Since such
+        whitelists reside in tests and not in the code that produces those
+        special cases, it's easy to change (fix) the code and then forget to
+        remove the special case from tests, leaving it there to never be used
+        again.
+
+        This class then provides a way to see if such particular element
+        doesn't actually need to be in the whitelist anymore.
+    """
+    def __init__(self, *args):
+        self.store = set(args)
+        self.unused = set(args)
+
+    def __contains__(self, item):
+        self.unused.discard(item)
+        return item in self.store
+
+    def check_unused(self):
+        if self.unused:
+            from quodlibet import print_w
+            print_w('ListWithUnused has unused items: %s' % self.unused)

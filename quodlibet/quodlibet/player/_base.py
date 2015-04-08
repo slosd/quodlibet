@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2007-2008 Joe Wreschnig
 #           2009,2010 Steven Robertson
 #           2009-2013 Christoph Reiter
@@ -7,6 +8,8 @@
 # published by the Free Software Foundation
 
 from gi.repository import GObject
+
+from quodlibet.formats._audio import AudioFile
 
 
 class Equalizer(object):
@@ -68,6 +71,7 @@ class BasePlayer(GObject.GObject, Equalizer):
     replaygain_profiles = [None, None, None, ["none"]]
     _volume = 1.0
     _paused = True
+    _source = None
 
     _gsignals_ = {
         'song-started':
@@ -84,7 +88,8 @@ class BasePlayer(GObject.GObject, Equalizer):
 
     _gproperties_ = {
         'volume': (float, 'player volume', 'the volume of the player',
-                   0.0, 1.0, 1.0, GObject.PARAM_READWRITE)
+                   0.0, 1.0, 1.0,
+                   GObject.ParamFlags.READABLE | GObject.ParamFlags.WRITABLE)
         }
 
     def __init__(self, *args, **kwargs):
@@ -93,7 +98,12 @@ class BasePlayer(GObject.GObject, Equalizer):
     def destroy(self):
         """Free resources"""
 
+        if self.song is not self.info:
+            self.emit("song-ended", self.info, True)
+        self.emit("song-ended", self.song, True)
         self._source = None
+
+        self._destroy()
 
     def do_get_property(self, property):
         if property.name == 'volume':
@@ -101,9 +111,25 @@ class BasePlayer(GObject.GObject, Equalizer):
         else:
             raise AttributeError
 
-    def _set_volume(self, v):
+    @property
+    def volume(self):
+        return self._volume
+
+    @volume.setter
+    def volume(self, v):
         self.props.volume = min(1.0, max(0.0, v))
-    volume = property(lambda s: s._volume, _set_volume)
+
+    def _destroy(self):
+        """Clean up"""
+
+        raise NotImplementedError
+
+    def _end(self, stopped, next_song=None):
+        """Start playing the current song from the source or
+        next_song if it isn't None.
+        """
+
+        raise NotImplementedError
 
     def setup(self, source, song, seek_pos):
         """Connect to a PlaylistModel, and load a song.
@@ -111,8 +137,11 @@ class BasePlayer(GObject.GObject, Equalizer):
         seek_pos in millisecs
         """
 
+        assert source is not None
+        if self._source is None:
+            self.emit("song-started", song)
         self._source = source
-        self.go_to(song)
+        self.go_to(song, explicit=True)
         if seek_pos:
             self.seek(seek_pos)
 
@@ -175,16 +204,28 @@ class BasePlayer(GObject.GObject, Equalizer):
         if self.song:
             self.paused = False
 
-    def go_to(self, song, explicit=False):
-        """Activate the song in the playlist and play it.
-        explicit if the action comes from the user
+    def go_to(self, song_or_iter, explicit=False, source=None):
+        """Activate the song or iter in the playlist if possible and play it.
+
+        Explicit if the action comes from the user.
+
+        Returns True if there is an active song after the call returns.
         """
 
-        print_d("Going to %r" % getattr(song, "key", song))
-        res = self._source.go_to(song, explicit)
-        if explicit and not res:
-            return False
-        self._end(True)
+        print_d("Going to %r" % getattr(song_or_iter, "key", song_or_iter))
+
+        if self._source.go_to(song_or_iter, explicit, source):
+            self._end(True)
+        else:
+            if isinstance(song_or_iter, AudioFile):
+                self._end(True, song_or_iter)
+            else:
+                # FIXME: this is for the queue only plugin. the play order
+                # should return if it has handled set() itself instead
+                if explicit:
+                    return
+                self._end(True)
+
         return self.song is not None
 
     def can_play_uri(self, uri):

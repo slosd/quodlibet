@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2007 Joe Wreschnig
 #
 # This software and accompanying documentation, if any, may be freely
@@ -25,8 +26,8 @@ from distutils.command.install import install as distutils_install
 
 from gdist.shortcuts import build_shortcuts, install_shortcuts
 from gdist.man import install_man
-from gdist.po import build_mo, install_mo, po_stats
-from gdist.icons import build_icon_cache, install_icons
+from gdist.po import build_mo, install_mo, po_stats, update_po
+from gdist.icons import install_icons
 from gdist.search_provider import install_search_provider
 from gdist.dbus_services import build_dbus_services, install_dbus_services
 from gdist.appdata import build_appdata, install_appdata
@@ -35,18 +36,28 @@ from gdist.appdata import build_appdata, install_appdata
 class build(distutils_build):
     """Override the default build with new subcommands."""
 
+    user_options = distutils_build.user_options + [
+        ("skip-po-update", None, "Don't update pot/po files"),
+    ]
+
     sub_commands = distutils_build.sub_commands + [
         ("build_mo",
          lambda self: self.distribution.has_po()),
         ("build_shortcuts",
          lambda self: self.distribution.has_shortcuts()),
-        ("build_icon_cache",
-         lambda self: self.distribution.need_icon_cache()),
         ("build_dbus_services",
          lambda self: self.distribution.has_dbus_services()),
         ("build_appdata",
          lambda self: self.distribution.has_appdata()),
     ]
+
+    def initialize_options(self):
+        distutils_build.initialize_options(self)
+        self.skip_po_update = False
+
+    def finalize_options(self):
+        distutils_build.finalize_options(self)
+        self.skip_po_update = bool(self.skip_po_update)
 
 
 class install(distutils_install):
@@ -110,7 +121,6 @@ class GDistribution(Distribution):
         Distribution.__init__(self, *args, **kwargs)
         self.cmdclass.setdefault("build_mo", build_mo)
         self.cmdclass.setdefault("build_shortcuts", build_shortcuts)
-        self.cmdclass.setdefault("build_icon_cache", build_icon_cache)
         self.cmdclass.setdefault("build_dbus_services", build_dbus_services)
         self.cmdclass.setdefault("build_appdata", build_appdata)
         self.cmdclass.setdefault("install_icons", install_icons)
@@ -125,6 +135,7 @@ class GDistribution(Distribution):
         self.cmdclass.setdefault("build", build)
         self.cmdclass.setdefault("install", install)
         self.cmdclass.setdefault("po_stats", po_stats)
+        self.cmdclass.setdefault("update_po", update_po)
 
     def has_po(self):
         return os.name != 'nt' and bool(self.po_directory)
@@ -140,9 +151,6 @@ class GDistribution(Distribution):
 
     def has_dbus_services(self):
         return os.name != 'nt' and bool(self.dbus_services)
-
-    def need_icon_cache(self):
-        return True
 
     def need_icon_install(self):
         return os.name != 'nt'

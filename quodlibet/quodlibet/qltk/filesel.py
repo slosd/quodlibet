@@ -9,22 +9,24 @@ import os
 import urlparse
 import errno
 
-from gi.repository import Gtk, GObject, Gdk
+from gi.repository import Gtk, GObject, Gdk, Gio, Pango
 
 from quodlibet import const
 from quodlibet import formats
 from quodlibet import qltk
-from quodlibet import util
 from quodlibet import windows
 
 from quodlibet.qltk.getstring import GetStringDialog
-from quodlibet.qltk.views import AllTreeView, RCMTreeView, MultiDragTreeView
+from quodlibet.qltk.views import AllTreeView, RCMHintedTreeView, \
+    MultiDragTreeView
 from quodlibet.qltk.views import TreeViewColumn
-from quodlibet.qltk.x import ScrolledWindow
+from quodlibet.qltk.x import ScrolledWindow, Paned
 from quodlibet.qltk.models import ObjectStore, ObjectTreeStore
 
-from quodlibet.util.path import fsdecode, listdir
+from quodlibet.util.path import fsdecode, listdir, is_fsnative, \
+    glib2fsnative, fsnative, xdg_get_user_dirs
 from quodlibet.util.uri import URI
+from quodlibet.util import connect_obj
 
 
 def search_func(model, column, key, iter_, handledirs):
@@ -93,14 +95,23 @@ def get_favorites():
     if os.name == "nt":
         return _get_win_favorites()
     else:
-        return [const.HOME, "/"]
+        paths = [const.HOME]
+
+        xfg_user_dirs = xdg_get_user_dirs()
+        for key in ["XDG_DESKTOP_DIR", "XDG_DOWNLOAD_DIR", "XDG_MUSIC_DIR"]:
+            if key in xfg_user_dirs:
+                path = xfg_user_dirs[key]
+                if path not in paths:
+                    paths.append(path)
+
+        return paths
 
 
 def _get_win_drives():
     """Returns a list of paths for all available drives e.g. ['C:\\']"""
 
     assert os.name == "nt"
-    drives = [letter + ":\\" for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ"]
+    drives = [letter + u":\\" for letter in u"CDEFGHIJKLMNOPQRSTUVWXYZ"]
     return [d for d in drives if os.path.isdir(d)]
 
 
@@ -110,7 +121,13 @@ def get_drives():
     if os.name == "nt":
         return _get_win_drives()
     else:
-        return []
+        paths = []
+        for mount in Gio.VolumeMonitor.get().get_mounts():
+            path = mount.get_root().get_path()
+            if path is not None:
+                paths.append(glib2fsnative(path))
+        paths.append("/")
+        return paths
 
 
 def get_gtk_bookmarks():
@@ -118,6 +135,9 @@ def get_gtk_bookmarks():
 
     The paths don't have to exist.
     """
+
+    if os.name == "nt":
+        return []
 
     path = os.path.join(const.HOME, ".gtk-bookmarks")
     folders = []
@@ -135,7 +155,7 @@ def get_gtk_bookmarks():
     return folders
 
 
-class DirectoryTree(RCMTreeView, MultiDragTreeView):
+class DirectoryTree(RCMHintedTreeView, MultiDragTreeView):
     """A tree view showing multiple folder hierarchies"""
 
     def __init__(self, initial=None, folders=None):
@@ -149,7 +169,7 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
         super(DirectoryTree, self).__init__(model=model)
 
         if initial is not None:
-            initial = util.fsnative(initial)
+            assert is_fsnative(initial)
 
         column = TreeViewColumn(_("Folders"))
         column.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
@@ -157,6 +177,8 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
         render.set_property('stock_id', Gtk.STOCK_DIRECTORY)
         column.pack_start(render, False)
         render = Gtk.CellRendererText()
+        if self.supports_hints():
+            render.set_property('ellipsize', Pango.EllipsizeMode.END)
         column.pack_start(render, True)
 
         def cell_data(column, cell, model, iter_, userdata):
@@ -177,6 +199,7 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
         for path in folders:
             niter = model.append(None, [path])
             if path is not None:
+                assert is_fsnative(path)
                 model.append(niter, ["dummy"])
 
         self.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
@@ -190,7 +213,7 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
             self.go_to(initial)
 
         menu = Gtk.Menu()
-        m = qltk.MenuItem(_("_New Folder..."), Gtk.STOCK_NEW)
+        m = qltk.MenuItem(_(u"_New Folder…"), Gtk.STOCK_NEW)
         m.connect('activate', self.__mkdir)
         menu.append(m)
         m = Gtk.ImageMenuItem.new_from_stock(Gtk.STOCK_DELETE, None)
@@ -203,7 +226,7 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
         m.connect('activate', self.__expand)
         menu.append(m)
         menu.show_all()
-        self.connect_object('popup-menu', self.__popup_menu, menu)
+        connect_obj(self, 'popup-menu', self.__popup_menu, menu)
 
         # Allow to drag and drop files from outside
         targets = [
@@ -221,18 +244,15 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
         return [model[p][0] for p in paths]
 
     def go_to(self, path_to_go):
-        # FIXME: be stricter here..
-        # assert util.is_fsnative(path_to_go)
+        assert is_fsnative(path_to_go)
 
         # FIXME: what about non-normalized paths?
-
-        path_to_go = util.fsnative(path_to_go)
         model = self.get_model()
 
         # Find the top level row which has the largest common
         # path with the path we want to go to
         roots = dict([(p, i) for (i, p) in model.iterrows(None)])
-        head, tail = path_to_go, util.fsnative("")
+        head, tail = path_to_go, fsnative(u"")
         to_find = []
         while head and head not in roots:
             new_head, tail = os.path.split(head)
@@ -319,7 +339,7 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
         if not dir_:
             return
 
-        dir_ = util.fsnative(dir_.decode('utf-8'))
+        dir_ = glib2fsnative(dir_)
         fullpath = os.path.realpath(os.path.join(directory, dir_))
 
         try:
@@ -428,7 +448,7 @@ class DirectoryTree(RCMTreeView, MultiDragTreeView):
                 window.set_cursor(None)
 
 
-class FileSelector(Gtk.VPaned):
+class FileSelector(Paned):
     """A file selector widget consisting of a folder tree
     and a file list below.
     """
@@ -445,11 +465,12 @@ class FileSelector(Gtk.VPaned):
         folders -- list of shown folders in the directory tree
         """
 
-        super(FileSelector, self).__init__()
+        super(FileSelector, self).__init__(
+            orientation=Gtk.Orientation.VERTICAL)
         self.__filter = filter
 
         if initial is not None:
-            initial = util.fsnative(initial)
+            assert is_fsnative(initial)
 
         if initial and os.path.isfile(initial):
             initial = os.path.dirname(initial)
@@ -465,6 +486,8 @@ class FileSelector(Gtk.VPaned):
         render.props.xpad = 3
         column.pack_start(render, False)
         render = Gtk.CellRendererText()
+        if filelist.supports_hints():
+            render.set_property('ellipsize', Pango.EllipsizeMode.END)
         column.pack_start(render, True)
 
         def cell_data(column, cell, model, iter_, userdata):

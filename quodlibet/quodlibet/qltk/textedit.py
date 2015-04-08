@@ -11,7 +11,8 @@ from quodlibet import qltk
 from quodlibet import util
 
 from quodlibet.formats._audio import AudioFile
-from quodlibet.parse import XMLFromPattern
+from quodlibet.pattern import XMLFromPattern
+from quodlibet.util import connect_obj
 
 try:
     import gi
@@ -59,15 +60,18 @@ class TextEditBox(Gtk.HBox):
         box.pack_start(rev, False, True, 0)
         box.pack_start(app, False, True, 0)
         self.pack_start(box, False, True, 0)
-        rev.connect_object('clicked', self.buffer.set_text, default)
+        connect_obj(rev, 'clicked', self.buffer.set_text, default)
         self.revert = rev
         self.apply = app
 
-    def __get_text(self):
+    @property
+    def text(self):
         start, end = self.buffer.get_bounds()
         return self.buffer.get_text(start, end, True).decode('utf-8')
-    text = property(__get_text,
-                    lambda s, v: s.buffer.set_text(v, -1))
+
+    @text.setter
+    def text(self, value):
+        self.buffer.set_text(value, -1)
 
 
 class PatternEditBox(TextEditBox):
@@ -116,7 +120,9 @@ class TextEdit(qltk.UniqueWindow):
 
         self.box = box = self.Box(default)
         vbox.pack_start(box, True, True, 0)
-        vbox.pack_start(b, False, True, 0)
+        self.use_header_bar()
+        if not self.has_close_button():
+            vbox.pack_start(b, False, True, 0)
 
         self.add(vbox)
         self.apply = box.apply
@@ -125,8 +131,13 @@ class TextEdit(qltk.UniqueWindow):
         close.grab_focus()
         self.get_child().show_all()
 
-    text = property(lambda s: s.box.text,
-                    lambda s, v: setattr(s.box, 'text', v))
+    @property
+    def text(self):
+        return self.box.text
+
+    @text.setter
+    def text(self, value):
+        self.box.text = value
 
 
 class PatternEdit(TextEdit):

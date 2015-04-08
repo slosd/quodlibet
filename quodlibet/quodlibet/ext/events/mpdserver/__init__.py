@@ -1,8 +1,16 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Christoph Reiter <reiter.christoph@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of version 2 of the GNU General Public License as
 # published by the Free Software Foundation.
+
+import os
+
+if os.name == "nt":
+    from quodlibet.plugins import PluginNotSupportedError
+    # we are missing socket.fromfd on Windows
+    raise PluginNotSupportedError
 
 import socket
 import threading
@@ -52,12 +60,15 @@ def set_port_num(value):
 class MPDServerPlugin(EventPlugin):
     PLUGIN_ID = "mpd_server"
     PLUGIN_NAME = _("MPD Server")
-    PLUGIN_DESC = _("Control Quod Libet remotely using a MPD Client. "
-        "Streaming, playlist and library management are not supported.")
+    PLUGIN_DESC = _("Allows remote control of Quod Libet using an MPD Client. "
+                    "Streaming, playlist and library management "
+                    "are not supported.")
     PLUGIN_ICON = Gtk.STOCK_CONNECT
 
+    _server = None
+
     def PluginPreferences(self, parent):
-        table = Gtk.Table(2, 3)
+        table = Gtk.Table(n_rows=2, n_columns=3)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
@@ -121,12 +132,12 @@ class MPDServerPlugin(EventPlugin):
 
         clients = Gtk.Label()
         clients.set_padding(6, 6)
-        clients.set_markup(_(u"""\
+        clients.set_markup(u"""\
 \u2022 <a href="https://play.google.com/store/apps/details?id=com.\
 namelessdev.mpdroid">MPDroid 1.06</a> (Android)<small>
 
 </small>\u2022 <a href="http://sonata.berlios.de/">Sonata 1.6</a> (Linux)\
-"""))
+""")
         clients.set_alignment(0, 0)
 
         box.pack_start(

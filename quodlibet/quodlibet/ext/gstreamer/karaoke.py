@@ -11,7 +11,6 @@ from quodlibet.plugins import PluginImportException
 from quodlibet.plugins.gstelement import GStreamerPlugin
 from quodlibet import qltk
 from quodlibet import config
-from quodlibet.util import gobject_weak
 
 
 _PLUGIN_ID = "karaoke"
@@ -45,7 +44,7 @@ class Preferences(Gtk.VBox):
     def __init__(self):
         super(Preferences, self).__init__(spacing=12)
 
-        table = Gtk.Table(3, 2)
+        table = Gtk.Table(n_rows=3, n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
@@ -76,7 +75,7 @@ class Preferences(Gtk.VBox):
             step = steps[idx]
             page = pages[idx]
             scale = Gtk.HScale(
-                adjustment=Gtk.Adjustment(0, 0, max_value, step, page))
+                adjustment=Gtk.Adjustment.new(0, 0, max_value, step, page, 0))
             scales[key] = scale
             if step < 0.1:
                 scale.set_digits(2)
@@ -91,6 +90,11 @@ class Preferences(Gtk.VBox):
             return _("%d %%") % (value * 100)
         scales["level"].connect('format-value', format_perc)
 
+        def format_hertz(scale, value):
+            return _("%d Hz") % value
+        scales["band"].connect('format-value', format_hertz)
+        scales["width"].connect('format-value', format_hertz)
+
         self.pack_start(qltk.Frame(_("Preferences"), child=table),
                         True, True, 0)
 
@@ -98,7 +102,7 @@ class Preferences(Gtk.VBox):
 class Karaoke(GStreamerPlugin):
     PLUGIN_ID = _PLUGIN_ID
     PLUGIN_NAME = _("Karaoke")
-    PLUGIN_DESC = _("Remove voice from audio.")
+    PLUGIN_DESC = _("Removes main vocals from audio.")
     PLUGIN_ICON = "audio-volume-high"
 
     @classmethod
@@ -114,7 +118,7 @@ class Karaoke(GStreamerPlugin):
     @classmethod
     def PluginPreferences(cls, window):
         prefs = Preferences()
-        gobject_weak(prefs.connect, "changed", lambda *x: cls.queue_update())
+        prefs.connect("changed", lambda *x: cls.queue_update())
         return prefs
 
 

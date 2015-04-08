@@ -8,19 +8,16 @@
 import os
 
 from gi.repository import Gtk, GObject, Pango
-from quodlibet.qltk.msg import confirm_action
 
 from quodlibet import config
 from quodlibet import const
 from quodlibet import formats
 from quodlibet import qltk
-from quodlibet import util
 
 from quodlibet.plugins import PluginManager
-from quodlibet.qltk.ccb import ConfigCheckButton
 from quodlibet.qltk.delete import trash_files, TrashMenuItem
 from quodlibet.qltk.edittags import EditTags
-from quodlibet.qltk.filesel import MainFileSelector, FileSelector
+from quodlibet.qltk.filesel import MainFileSelector
 from quodlibet.qltk.pluginwin import PluginWindow
 from quodlibet.qltk.renamefiles import RenameFiles
 from quodlibet.qltk.tagsfrompath import TagsFromPath
@@ -28,27 +25,28 @@ from quodlibet.qltk.tracknumbers import TrackNumbers
 from quodlibet.qltk.entry import UndoEntry
 from quodlibet.qltk.about import AboutExFalso
 from quodlibet.qltk.songsmenu import SongsMenuPluginHandler
-from quodlibet.qltk.x import Alignment, SeparatorMenuItem, ConfigRHPaned
-from quodlibet.qltk.window import PersistentWindowMixin
+from quodlibet.qltk.x import Align, SeparatorMenuItem, ConfigRHPaned, \
+    Button
+from quodlibet.qltk.window import PersistentWindowMixin, Window, UniqueWindow
+from quodlibet.qltk import icons
 from quodlibet.util.path import mtime, normalize_path
+from quodlibet.util import connect_obj, connect_destroy
 
 
-class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
+class ExFalsoWindow(Window, PersistentWindowMixin):
+
     __gsignals__ = {
-        'changed': (GObject.SignalFlags.RUN_LAST,
-                    None, (object,)),
-        'artwork-changed': (GObject.SignalFlags.RUN_LAST,
-                            None, (object,))
+        'changed': (GObject.SignalFlags.RUN_LAST, None, (object,)),
     }
 
-    pm = SongsMenuPluginHandler(confirm_action)
+    pm = SongsMenuPluginHandler()
 
     @classmethod
     def init_plugins(cls):
         PluginManager.instance.register_handler(cls.pm)
 
     def __init__(self, library, dir=None):
-        super(ExFalsoWindow, self).__init__()
+        super(ExFalsoWindow, self).__init__(dialog=False)
         self.set_title("Ex Falso")
         self.set_default_size(750, 475)
         self.enable_window_tracking("exfalso")
@@ -68,7 +66,7 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
         about = Gtk.Button()
         about.add(Gtk.Image.new_from_stock(
             Gtk.STOCK_ABOUT, Gtk.IconSize.BUTTON))
-        about.connect_object('clicked', self.__show_about, self)
+        connect_obj(about, 'clicked', self.__show_about, self)
         bbox.pack_start(about, False, True, 0)
 
         prefs = Gtk.Button()
@@ -97,7 +95,7 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
         fs = MainFileSelector()
 
         vb.pack_start(fs, True, True, 0)
-        vb.pack_start(Alignment(bbox, border=6), False, True, 0)
+        vb.pack_start(Align(bbox, border=6), False, True, 0)
         vb.show_all()
 
         hp.pack1(vb, resize=True, shrink=False)
@@ -109,16 +107,17 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
             page = Page(self, self.__library)
             page.show()
             nb.append_page(page)
-        align = Alignment(nb, top=3)
+        align = Align(nb, top=3)
         align.show()
         hp.pack2(align, resize=True, shrink=False)
         fs.connect('changed', self.__changed, l)
         if dir:
             fs.go_to(dir)
-        s = self.__library.connect('changed', lambda *x: fs.rescan())
-        self.connect_object('destroy', self.__library.disconnect, s)
+
+        connect_destroy(self.__library, 'changed', self.__library_changed, fs)
+
         self.__save = None
-        self.connect_object('changed', self.set_pending, None)
+        connect_obj(self, 'changed', self.set_pending, None)
         for c in fs.get_children():
             c.get_child().connect('button-press-event',
                 self.__pre_selection_changed, fs, nb)
@@ -134,6 +133,15 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
         key, mod = Gtk.accelerator_parse("<control>Q")
         self.__ag.connect(key, mod, 0, lambda *x: self.destroy())
         self.add_accel_group(self.__ag)
+
+    def __library_changed(self, library, songs, fs):
+        fs.rescan()
+
+    def set_as_osx_window(self, osx_app):
+        osx_app.set_menu_bar(Gtk.MenuBar())
+
+    def get_osx_is_persistent(self):
+        return False
 
     def __show_about(self, window):
         about = AboutExFalso(self)
@@ -155,7 +163,6 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
                 return True # cancel or closed
 
     def __popup_menu(self, view, fs):
-
         # get all songs for the selection
         filenames = [normalize_path(f, canonicalise=True)
                      for f in fs.get_selected_paths()]
@@ -163,7 +170,7 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
         songs = [s for s in maybe_songs if s]
 
         if songs:
-            menu = self.pm.Menu(self.__library, self, songs)
+            menu = self.pm.Menu(self.__library, songs)
             if menu is None:
                 menu = Gtk.Menu()
             else:
@@ -174,7 +181,11 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
         b = TrashMenuItem()
         b.connect('activate', self.__delete, filenames, fs)
         menu.prepend(b)
-        menu.connect_object('selection-done', Gtk.Menu.destroy, menu)
+
+        def selection_done_cb(menu):
+            menu.destroy()
+
+        menu.connect('selection-done', selection_done_cb)
         menu.show_all()
         return view.popup_menu(menu, 0, Gtk.get_current_event_time())
 
@@ -193,7 +204,7 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
         label.set_text(ngettext("%d song", "%d songs", count) % count)
 
         for row in rows:
-            filename = util.fsnative(model[row][0])
+            filename = model[row][0]
             if not os.path.exists(filename):
                 pass
             elif filename in self.__library:
@@ -222,7 +233,7 @@ class ExFalsoWindow(Gtk.Window, PersistentWindowMixin):
         self.emit('changed', files)
 
 
-class PreferencesWindow(qltk.UniqueWindow):
+class PreferencesWindow(UniqueWindow):
     def __init__(self, parent):
         if self.is_not_unique():
             return
@@ -242,27 +253,23 @@ class PreferencesWindow(qltk.UniqueWindow):
         l.set_mnemonic_widget(e)
         hb.pack_start(l, False, True, 0)
         hb.pack_start(e, True, True, 0)
-        cb = ConfigCheckButton(
-            _("Show _programmatic tags"), 'editing', 'alltags',
-            tooltip=_("Access all tags, including machine-generated "
-                      "ones e.g. MusicBrainz or Replay Gain tags"))
-        cb.set_active(config.getboolean("editing", 'alltags'))
         vbox.pack_start(hb, False, True, 0)
-        vbox.pack_start(cb, False, True, 0)
         f = qltk.Frame(_("Tag Editing"), child=vbox)
 
-        close = Gtk.Button(stock=Gtk.STOCK_CLOSE)
-        close.connect_object('clicked', lambda x: x.destroy(), self)
+        close = Button(_("_Close"), icons.WINDOW_CLOSE)
+        connect_obj(close, 'clicked', lambda x: x.destroy(), self)
         button_box = Gtk.HButtonBox()
         button_box.set_layout(Gtk.ButtonBoxStyle.END)
         button_box.pack_start(close, True, True, 0)
 
         main_vbox = Gtk.VBox(spacing=12)
         main_vbox.pack_start(f, True, True, 0)
-        main_vbox.pack_start(button_box, False, True, 0)
+        self.use_header_bar()
+        if not self.has_close_button():
+            main_vbox.pack_start(button_box, False, True, 0)
         self.add(main_vbox)
 
-        self.connect_object('destroy', PreferencesWindow.__destroy, self)
+        connect_obj(self, 'destroy', PreferencesWindow.__destroy, self)
         self.get_child().show_all()
 
     def __changed(self, entry, section, name):

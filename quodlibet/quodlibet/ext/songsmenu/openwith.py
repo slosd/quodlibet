@@ -1,8 +1,10 @@
+# -*- coding: utf-8 -*-
 from gi.repository import Gtk
 
 from quodlibet import util
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 from quodlibet.util.path import iscommand
+from quodlibet.util import connect_obj
 
 
 class Command(object):
@@ -29,10 +31,9 @@ class Command(object):
 
 class SendTo(SongsMenuPlugin):
     PLUGIN_ID = 'SendTo'
-    PLUGIN_NAME = _('Send To...')
+    PLUGIN_NAME = _(u'Send To…')
     PLUGIN_DESC = _("Generic file-opening plugin.")
     PLUGIN_ICON = Gtk.STOCK_EXECUTE
-    PLUGIN_VERSION = '1'
 
     commands = [
         Command("K3B", "k3b --audiocd", Command.FILES),
@@ -44,11 +45,11 @@ class SendTo(SongsMenuPlugin):
         self.command = None
         submenu = Gtk.Menu()
         for command in self.commands:
-            item = Gtk.MenuItem(command.title)
+            item = Gtk.MenuItem(label=command.title)
             if not command.exists():
                 item.set_sensitive(False)
             else:
-                item.connect_object('activate', self.__set, command)
+                connect_obj(item, 'activate', self.__set, command)
             submenu.append(item)
         if submenu.get_children():
             self.set_submenu(submenu)

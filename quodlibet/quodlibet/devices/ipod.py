@@ -11,16 +11,36 @@ import time
 from gi.repository import Gtk
 
 from quodlibet import const
-from quodlibet import qltk
-from quodlibet import util
+from quodlibet import app
 
+from quodlibet.qltk.msg import WarningMessage
+from quodlibet.qltk.x import Button
 from quodlibet.devices._base import Device
 from quodlibet.formats._audio import AudioFile
 
 
 # Wraps an itdb_track from libgpod in an AudioFile instance
-from quodlibet.util.path import fsdecode, fsencode, mtime, filesize
+from quodlibet.util.path import fsdecode, mtime, filesize, fsnative2glib
 from quodlibet.util.string import decode, encode
+
+
+class ConfirmDBCreate(WarningMessage):
+
+    RESPONSE_CREATE = 1
+
+    def __init__(self, parent):
+        title = _("Uninitialized iPod")
+        description = _(
+            "Do you want to create an empty database on this iPod?")
+
+        super(ConfirmDBCreate, self).__init__(
+            parent, title, description, buttons=Gtk.ButtonsType.NONE)
+
+        self.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        save_button = Button(_("_Create Database"), "system-run")
+        save_button.show()
+        self.add_action_widget(save_button, self.RESPONSE_CREATE)
+        self.set_default_response(Gtk.ResponseType.CANCEL)
 
 
 class IPodSong(AudioFile):
@@ -189,7 +209,7 @@ class IPodDevice(Device):
         self.__close_db()
         return songs
 
-    def copy(self, songlist, song):
+    def copy(self, parent_widget, song):
         if self.__load_db() is None:
             return False
         track = gpod.itdb_track_new()
@@ -245,19 +265,19 @@ class IPodDevice(Device):
             except ValueError:
                 continue
 
-        track.filetype = song('~format')
+        track.filetype = encode(song('~format'))
         track.comment = encode(fsdecode(song('~filename')))
 
         # Associate a cover with the track
         if self['covers']:
-            cover = song.find_cover()
+            cover = app.cover_manager.get_cover(song)
             if cover:
                 # libgpod will copy the file later when the iTunesDB
                 # is saved, so we have to keep a reference around in
                 # case the cover is a temporary file.
                 self.__covers.append(cover)
                 gpod.itdb_track_set_thumbnails(
-                    track, fsencode(cover.name))
+                    track, fsnative2glib(cover.name))
 
         # Add the track to the master playlist
         gpod.itdb_track_add(self.__itdb, track, -1)
@@ -270,7 +290,7 @@ class IPodDevice(Device):
         else:
             return False
 
-    def delete(self, songlist, song):
+    def delete(self, parent_widget, song):
         if self.__load_db() is None:
             return False
         try:
@@ -286,10 +306,7 @@ class IPodDevice(Device):
 
     def cleanup(self, wlb, action):
         try:
-            wlb.set_text("<b>Saving iPod database...</b>")
-            # This can take a while, so update the UI first
-            while Gtk.events_pending():
-                Gtk.main_iteration()
+            wlb.set_text("<b>%s</b>" % _(u"Saving iPod database…"))
 
             if not self.__save_db():
                 wlb.set_text(_("Unable to save iPod database"))
@@ -304,11 +321,11 @@ class IPodDevice(Device):
             return self.__itdb
 
         self.__itdb = gpod.itdb_parse(self.mountpoint, None)
-        if not self.__itdb and self.is_connected() and qltk.ConfirmAction(
-            None, _("Uninitialized iPod"),
-            _("Do you want to create an empty database on this iPod?")
-            ).run():
-            self.__itdb = self.__create_db()
+        if not self.__itdb and self.is_connected():
+            dialog = ConfirmDBCreate(None)
+            resp = dialog.run()
+            if resp == ConfirmDBCreate.RESPONSE_CREATE:
+                self.__itdb = self.__create_db()
 
         return self.__itdb
 

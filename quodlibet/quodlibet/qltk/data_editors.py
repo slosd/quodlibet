@@ -1,4 +1,5 @@
-# Copyright 2012-2013 Nick Boultbee
+# -*- coding: utf-8 -*-
+# Copyright 2012-2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -12,6 +13,7 @@ from quodlibet.util.dprint import print_d
 from quodlibet.qltk.entry import UndoEntry, ValidatingEntry
 from quodlibet.qltk.views import RCMHintedTreeView, HintedTreeView
 from quodlibet.util.json_data import JSONObjectDict
+from quodlibet.util import connect_obj
 from quodlibet.qltk.getstring import GetStringDialog
 
 
@@ -26,11 +28,14 @@ class JSONBasedEditor(qltk.UniqueWindow):
     _HEIGHT = 400
 
     def __init__(self, Prototype, values, filename, title):
+        if self.is_not_unique():
+            return
+        super(JSONBasedEditor, self).__init__()
         self.Prototype = Prototype
         self.current = None
         self.filename = filename
+        self.name = Prototype.NAME or Prototype.__name__
         self.input_entries = {}
-        super(JSONBasedEditor, self).__init__()
         self.set_border_width(12)
         self.set_title(title)
         self.set_default_size(self._WIDTH, self._HEIGHT)
@@ -44,7 +49,7 @@ class JSONBasedEditor(qltk.UniqueWindow):
         self._fill_values(values)
 
         # The browser for existing data
-        self.view = view = RCMHintedTreeView(self.model)
+        self.view = view = RCMHintedTreeView(model=self.model)
         view.set_headers_visible(False)
         view.set_reorderable(True)
         view.set_rules_hint(True)
@@ -71,12 +76,12 @@ class JSONBasedEditor(qltk.UniqueWindow):
         keyval, mod = Gtk.accelerator_parse("Delete")
         rem.add_accelerator(
             'activate', self.accels, keyval, mod, Gtk.AccelFlags.VISIBLE)
-        rem.connect_object('activate', self.__remove, view)
+        connect_obj(rem, 'activate', self.__remove, view)
         menu.append(rem)
         menu.show_all()
         view.connect('popup-menu', self.__popup, menu)
         view.connect('key-press-event', self.__view_key_press)
-        self.connect_object('destroy', Gtk.Menu.destroy, menu)
+        connect_obj(self, 'destroy', Gtk.Menu.destroy, menu)
 
         # New and Close buttons
         bbox = Gtk.HButtonBox()
@@ -86,16 +91,14 @@ class JSONBasedEditor(qltk.UniqueWindow):
         self.new_but.connect('clicked', self._new_item)
         bbox.pack_start(self.new_but, True, True, 0)
         close = Gtk.Button(stock=Gtk.STOCK_CLOSE)
-        close.connect_object('clicked', qltk.Window.destroy, self)
+        connect_obj(close, 'clicked', qltk.Window.destroy, self)
         bbox.pack_start(close, True, True, 0)
-        align = Gtk.Alignment(yalign=1.0, xscale=1.0)
-        align.add(bbox)
-        vbox.pack_end(align, False, True, 0)
+        vbox.pack_end(bbox, False, True, 0)
 
         self.get_child().pack_start(vbox, True, True, 0)
         # Initialise
         self.selection = view.get_selection()
-        model, iter = self.selection.get_selected()
+        model, _ = self.selection.get_selected()
 
         self.selection.connect('changed', self.__select)
         self.connect('destroy', self.__finish)
@@ -107,7 +110,7 @@ class JSONBasedEditor(qltk.UniqueWindow):
                 return row[0]
 
     def _new_item(self, button):
-        current_name = name = "New %s" % self.Prototype.__name__
+        current_name = name = _("New %s") % self.name
         n = 2
         while True:
             if self._find(current_name):
@@ -128,7 +131,7 @@ class JSONBasedEditor(qltk.UniqueWindow):
             callback = self.__toggled_widget
             signal = "toggled"
         elif isinstance(val, int):
-            adj = Gtk.Adjustment(0, 0, 10000, 1, 10, 0)
+            adj = Gtk.Adjustment.new(0, 0, 10000, 1, 10, 0)
             entry = Gtk.SpinButton(adjustment=adj)
             entry.set_numeric(True)
             callback = self.__changed_numeric_widget
@@ -174,21 +177,20 @@ class JSONBasedEditor(qltk.UniqueWindow):
                 widget.set_text(val or "")
 
     def __build_input_frame(self):
-        t = Gtk.Table(2, 3)
+        t = Gtk.Table(n_rows=2, n_columns=3)
         t.set_row_spacings(6)
         t.set_col_spacing(0, 3)
         t.set_col_spacing(1, 12)
 
         empty = self.Prototype("empty")
-        i = 0
         for i, (key, val) in enumerate(empty.data):
-            field_name = key and key.replace("_", " ").title() or "(unknown)"
+            field = empty.field(key)
+            field_name = self.get_field_name(field, key)
             l = Gtk.Label(label=field_name + ":")
             entry = self._new_widget(key, val)
             entry.set_sensitive(False)
-            tip = empty.field_description(key)
-            if tip:
-                entry.set_tooltip_text(tip)
+            if field.doc:
+                entry.set_tooltip_text(field.doc)
             # Store these away in a map for later access
             self.input_entries[key] = entry
             l.set_mnemonic_widget(entry)
@@ -196,9 +198,15 @@ class JSONBasedEditor(qltk.UniqueWindow):
             l.set_alignment(0.0, 0.5)
             t.attach(l, 0, 1, i, i + 1, xoptions=Gtk.AttachOptions.FILL)
             t.attach(entry, 1, 2, i, i + 1)
-        frame = qltk.Frame(label=self.Prototype.__name__, child=t)
+        frame = qltk.Frame(label=self.name, child=t)
         self.input_entries["name"].grab_focus()
         return frame
+
+    @staticmethod
+    def get_field_name(field, key):
+        field_name = (field.human_name
+                      or (key and key.replace("_", " ")))
+        return field_name and field_name.title() or _("(unknown)")
 
     def _fill_values(self, data):
         if not data:
@@ -284,7 +292,7 @@ class MultiStringEditor(qltk.UniqueWindow):
         menu.append(remove_item)
         menu.show_all()
         view.connect('popup-menu', self.__popup, menu)
-        remove_item.connect_object('activate', self.__remove, view)
+        connect_obj(remove_item, 'activate', self.__remove, view)
 
         # Add and Remove buttons
         vbbox = Gtk.VButtonBox()
@@ -304,7 +312,7 @@ class MultiStringEditor(qltk.UniqueWindow):
         self.remove_but = Gtk.Button(stock=Gtk.STOCK_REMOVE)
         self.remove_but.set_sensitive(False)
         close = Gtk.Button(stock=Gtk.STOCK_CLOSE)
-        close.connect_object('clicked', qltk.Window.destroy, self)
+        connect_obj(close, 'clicked', qltk.Window.destroy, self)
         bbox.set_layout(Gtk.ButtonBoxStyle.END)
         bbox.pack_start(close, True, True, 0)
         vbox.pack_start(bbox, False, True, 0)

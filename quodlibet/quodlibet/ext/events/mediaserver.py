@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012,2013 Christoph Reiter <reiter.christoph@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify
@@ -5,8 +6,9 @@
 # published by the Free Software Foundation.
 
 import os
+import sys
 
-if os.name == "nt":
+if os.name == "nt" or sys.platform == "darwin":
     from quodlibet.plugins import PluginNotSupportedError
     raise PluginNotSupportedError
 
@@ -19,7 +21,7 @@ import dbus.service
 
 from quodlibet import app
 from quodlibet.plugins.events import EventPlugin
-from quodlibet.parse import Pattern
+from quodlibet.pattern import Pattern
 from quodlibet.util.uri import URI
 from quodlibet.util.dbusutils import DBusIntrospectable, DBusProperty
 from quodlibet.util.dbusutils import dbus_unicode_validate as unival
@@ -32,9 +34,8 @@ class MediaServer(EventPlugin):
     PLUGIN_ID = "mediaserver"
     PLUGIN_NAME = _("UPnP AV Media Server")
     PLUGIN_DESC = _("Exposes all albums to the Rygel UPnP Media Server "
-                    "through the MediaServer2 D-Bus interface")
+                    "through the MediaServer2 D-Bus interface.")
     PLUGIN_ICON = Gtk.STOCK_CONNECT
-    PLUGIN_VERSION = "0.1"
 
     def enabled(self):
         try:
@@ -434,7 +435,7 @@ class SongObject(MediaItem, MediaObject, DBusProperty, DBusIntrospectable,
 
         for song in songs:
             song_id = str(id(song))
-            # https://code.google.com/p/quodlibet/issues/detail?id=1127
+            # https://github.com/quodlibet/quodlibet/issues/id=1127
             # XXX: Something is emitting wrong changed events..
             # ignore song_ids we don't know for now
             if song_id not in self.__map:

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2011 Christoph Reiter <reiter.christoph@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify
@@ -5,8 +6,9 @@
 # published by the Free Software Foundation.
 
 import os
+import sys
 
-if os.name == "nt":
+if os.name == "nt" or sys.platform == "darwin":
     from quodlibet.plugins import PluginNotSupportedError
     raise PluginNotSupportedError
 
@@ -36,10 +38,9 @@ class InhibitFlags(object):
 class SessionInhibit(EventPlugin):
     PLUGIN_ID = "screensaver_inhibit"
     PLUGIN_NAME = _("Inhibit Screensaver")
-    PLUGIN_DESC = _("Prevent the GNOME screensaver from activating while"
+    PLUGIN_DESC = _("Prevents the GNOME screensaver from activating while"
                     " a song is playing.")
     PLUGIN_ICON = Gtk.STOCK_STOP
-    PLUGIN_VERSION = "0.3"
 
     DBUS_NAME = "org.gnome.SessionManager"
     DBUS_INTERFACE = "org.gnome.SessionManager"

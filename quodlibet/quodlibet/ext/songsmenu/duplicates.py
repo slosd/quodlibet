@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 #
 #    Duplicates songs plugin.
 #
@@ -18,7 +19,7 @@ import unicodedata
 from gi.repository import Gtk, Pango
 
 from quodlibet import app
-from quodlibet import print_d, print_w, util, qltk
+from quodlibet import print_d, util, qltk
 from quodlibet.plugins import PluginConfigMixin
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 from quodlibet.qltk.ccb import ConfigCheckButton
@@ -26,6 +27,7 @@ from quodlibet.qltk.edittags import AudioFileGroup
 from quodlibet.qltk.entry import UndoEntry
 from quodlibet.qltk.songsmenu import SongsMenu
 from quodlibet.qltk.views import RCMHintedTreeView
+from quodlibet.util import connect_obj, connect_destroy
 
 
 class DuplicateSongsView(RCMHintedTreeView):
@@ -54,7 +56,7 @@ class DuplicateSongsView(RCMHintedTreeView):
             return
 
         menu = SongsMenu(
-            library, songs, delete=True, parent=self, plugins=False,
+            library, songs, delete=True, plugins=False,
             devices=False, playlists=False)
         menu.show_all()
         return menu
@@ -69,8 +71,6 @@ class DuplicateSongsView(RCMHintedTreeView):
             songs = self.get_selected_songs()
             if songs and player.go_to(songs[0], True):
                 player.paused = False
-            else:
-                print_w("Sorry, can't play song outside current list.")
 
     def _removed(self, library, songs):
         model = self.get_model()
@@ -127,7 +127,7 @@ class DuplicateSongsView(RCMHintedTreeView):
 
     def __init__(self, model):
         super(DuplicateSongsView, self).__init__(model)
-        self.connect_object('row-activated',
+        connect_obj(self, 'row-activated',
                             self.__select_song, app.player)
         # Selecting multiple is a nice feature it turns out.
         self.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
@@ -141,16 +141,7 @@ class DuplicateSongsView(RCMHintedTreeView):
         }
         for (sig, callback) in SIGNAL_MAP.items():
             print_d("Listening to library.%s signals" % sig)
-            self.connected_library_sigs.append(
-                app.library.connect(sig, callback))
-
-        # And disconnect, or Bad Stuff happens.
-        self.connect('destroy', self.on_destroy)
-
-    def on_destroy(self, view):
-        print_d("Disconnecting from library signals...")
-        for sig in self.connected_library_sigs:
-            app.library.disconnect(sig)
+            connect_destroy(app.library, sig, callback)
 
 
 class DuplicatesTreeModel(Gtk.TreeStore):
@@ -161,7 +152,7 @@ class DuplicatesTreeModel(Gtk.TreeStore):
         return x
     TAG_MAP = [
         ("artist", i), ("title", i), ("album", i),
-        ("~#length", lambda s: util.format_time(int(s))),
+        ("~#length", lambda s: util.format_time_display(int(s))),
         ("~#filesize", lambda s: util.format_size(int(s))), ("~#bitrate", i),
         ("~filename", i)]
     # Now make a dict. This seems clunky.
@@ -173,7 +164,10 @@ class DuplicatesTreeModel(Gtk.TreeStore):
     def group_value(cls, group, tag):
         """Gets a formatted aggregated value/dummy for a set of tag values"""
         try:
-            group_val = group[tag].safenicestr()
+            vals = []
+            for comment in group[tag]:
+                vals.append(comment.get_markup())
+            group_val = "\n".join(vals)
         except KeyError:
             return ""
         else:
@@ -212,7 +206,7 @@ class DuplicatesTreeModel(Gtk.TreeStore):
 
     def add_group(self, key, songs):
         """Adds a new group, returning the row created"""
-        group = AudioFileGroup(songs)
+        group = AudioFileGroup(songs, real_keys_only=False)
         # Add the group first.
         parent = self.append(None,
             [key] +
@@ -347,7 +341,7 @@ class DuplicateDialog(Gtk.Window):
                     view.expand_row(row.path, False)
 
         expand = Gtk.Button(_("Collapse / Expand all"))
-        expand.connect_object("clicked", expand_all, view)
+        connect_obj(expand, "clicked", expand_all, view)
         hbox.pack_start(expand, False, True, 0)
 
         label = Gtk.Label(label=_("Duplicate key expression is '%s'") %
@@ -367,9 +361,8 @@ class DuplicateDialog(Gtk.Window):
 class Duplicates(SongsMenuPlugin, PluginConfigMixin):
     PLUGIN_ID = 'Duplicates'
     PLUGIN_NAME = _('Duplicates Browser')
-    PLUGIN_DESC = _('Find and browse similarly tagged versions of songs.')
+    PLUGIN_DESC = _('Finds and displays similarly tagged versions of songs.')
     PLUGIN_ICON = Gtk.STOCK_MEDIA_PLAY
-    PLUGIN_VERSION = "0.7"
 
     MIN_GROUP_SIZE = 2
     _CFG_KEY_KEY = "key_expression"
@@ -407,13 +400,13 @@ class Duplicates(SongsMenuPlugin, PluginConfigMixin):
         e = UndoEntry()
         e.set_text(cls.get_key_expression())
         e.connect("changed", key_changed)
-        e.set_tooltip_markup("Accepts QL tag expressions like "
-                "<tt>~artist~title</tt> or <tt>musicbrainz_track_id</tt>")
+        e.set_tooltip_markup(_("Accepts QL tag expressions like "
+                "<tt>~artist~title</tt> or <tt>musicbrainz_track_id</tt>"))
         lbl = Gtk.Label(label=_("_Group duplicates by:"))
         lbl.set_mnemonic_widget(e)
         lbl.set_use_underline(True)
         hbox.pack_start(lbl, False, True, 0)
-        hbox.pack_start(e, False, True, 0)
+        hbox.pack_start(e, True, True, 0)
         frame = qltk.Frame(label=_("Duplicate Key"), child=hbox)
         vb.pack_start(frame, True, True, 0)
 

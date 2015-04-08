@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2010 Steven Robertson
 #
 # This program is free software; you can redistribute it and/or modify
@@ -81,7 +82,7 @@ class LastFMSyncCache(object):
             # charts if it's been more than a day since the last poll
             now = time.time()
             if not self.lastupdated or self.lastupdated + (24 * 60 * 60) < now:
-                prog("Updating chart list.", 0)
+                prog(_("Updating chart list."), 0)
                 resp = apicall('user.getweeklychartlist', user=self.username)
                 charts = resp['weeklychartlist']['chart']
                 for chart in charts:
@@ -222,10 +223,9 @@ class LastFMSyncWindow(Gtk.Dialog):
 class LastFMSync(SongsMenuPlugin):
     PLUGIN_ID = "Last.fm Sync"
     PLUGIN_NAME = _("Last.fm Sync")
-    PLUGIN_DESC = ("Update your library's statistics from your "
-                   "Last.fm profile.")
+    PLUGIN_DESC = _("Updates your library's statistics from your "
+                    "Last.fm profile.")
     PLUGIN_ICON = 'gtk-refresh'
-    PLUGIN_VERSION = '0.1'
 
     CACHE_PATH = os.path.join(const.USERDIR, "lastfmsync.db")
 

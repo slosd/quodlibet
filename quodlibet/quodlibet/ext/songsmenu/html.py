@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Eduardo Gonzalez
 #
 # This program is free software; you can redistribute it and/or modify
@@ -6,13 +7,13 @@
 
 from gi.repository import Gtk
 
-from quodlibet import config
 from quodlibet.util import tag, escape
+from quodlibet.qltk.songlist import get_columns
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 
-HTML = '''<?xml version="1.0" encoding="UTF-8"?>
-<html>
+HTML = '''<html>
 <head><title>Quod Libet Playlist</title>
+ <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
  <style type="text/css">
   table {table-collapse:collapse; border-spacing:0; width: 100%%}
   td {border: 0; padding:7px}
@@ -37,7 +38,7 @@ HTML = '''<?xml version="1.0" encoding="UTF-8"?>
 
 
 def to_html(songs):
-    cols = config.get_columns()
+    cols = get_columns()
 
     cols_s = ""
     for col in cols:
@@ -60,9 +61,8 @@ def to_html(songs):
 class ExportToHTML(SongsMenuPlugin):
     PLUGIN_ID = "Export to HTML"
     PLUGIN_NAME = _("Export to HTML")
-    PLUGIN_DESC = _("Export the selected song list to HTML.")
+    PLUGIN_DESC = _("Exports the selected song list to HTML.")
     PLUGIN_ICON = Gtk.STOCK_CONVERT
-    PLUGIN_VERSION = "0.17"
 
     def plugin_songs(self, songs):
         if not songs:

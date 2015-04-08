@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # TODO: Share better with, i.e. test MenuItemPlugin directly
 
 import os
@@ -13,11 +14,12 @@ from quodlibet.plugins import PluginManager, Plugin
 from tests.helper import capture_output
 
 MAX_PLAYLISTS = 50
-TEST_PLAYLIST = Playlist("/tmp", "foo")
+DIR = mkdtemp()
+TEST_PLAYLIST = Playlist(DIR, "foo")
 
 
 def generate_playlists(n):
-    return [Playlist("/tmp", "Playlist %d" % x) for x in range(n)]
+    return [Playlist(DIR, "Playlist %d" % x) for x in range(n)]
 
 
 class TPlaylistPlugins(TestCase):
@@ -36,7 +38,7 @@ class TPlaylistPlugins(TestCase):
         def is_toplevel(self):
             return True
 
-    def _confirmer(self, msg):
+    def _confirmer(self, *args):
         self.confirmed = True
 
     def setUp(self):
@@ -177,8 +179,8 @@ class FakePlaylistPlugin(PlaylistPlugin):
     MAX_INVOCATIONS = MAX_PLAYLISTS
     total = 0
 
-    def __init__(self, playlists, library, window):
-        super(FakePlaylistPlugin, self).__init__(playlists, library, window)
+    def __init__(self, playlists, library):
+        super(FakePlaylistPlugin, self).__init__(playlists, library)
         self.total = 0
 
     def plugin_playlist(self, _):

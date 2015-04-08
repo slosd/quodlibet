@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012 Nick Boultbee
 #           2012,2014 Christoph Reiter
 #
@@ -6,6 +7,7 @@
 # published by the Free Software Foundation
 
 import os
+import sys
 import subprocess
 
 from gi.repository import Gtk
@@ -60,7 +62,6 @@ def browse_folders_fdo(songs):
 
         # open each folder and select the first file we have selected
         for dirname, sub_songs in group_songs(songs).items():
-            print sub_songs[0]("~uri"), get_startup_id()
             bus_iface.ShowItems([sub_songs[0]("~uri")], get_startup_id())
     except dbus.DBusException as e:
         raise BrowseError(e)
@@ -152,16 +153,27 @@ def browse_folders_win_explorer(songs):
             raise BrowseError
 
 
+def browse_folders_finder(songs):
+    if sys.platform != "darwin":
+        raise BrowseError("OS X only")
+
+    try:
+        for dir_ in group_songs(songs).keys():
+            if subprocess.call(["open", "-R", dir_]) != 0:
+                raise EnvironmentError("open error return status")
+    except EnvironmentError as e:
+        raise BrowseError(e)
+
+
 class BrowseFolders(SongsMenuPlugin):
     PLUGIN_ID = 'Browse Folders'
     PLUGIN_NAME = _('Browse Folders')
-    PLUGIN_DESC = "View the songs' folders in a file manager"
+    PLUGIN_DESC = _("Opens the songs' folders in a file manager.")
     PLUGIN_ICON = Gtk.STOCK_OPEN
-    PLUGIN_VERSION = '1.1'
 
     _HANDLERS = [browse_folders_fdo, browse_folders_thunar,
                  browse_folders_xdg_open, browse_folders_gnome_open,
-                 browse_folders_win_explorer]
+                 browse_folders_win_explorer, browse_folders_finder]
 
     def plugin_songs(self, songs):
         songs = [s for s in songs if s.is_file]

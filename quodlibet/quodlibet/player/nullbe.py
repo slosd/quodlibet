@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2004 Joe Wreschnig, Michael Urman
 #
 # This program is free software; you can redistribute it and/or modify
@@ -6,7 +7,6 @@
 
 from quodlibet.player._base import BasePlayer
 from quodlibet.player import PlayerError
-from quodlibet.qltk.songlist import PlaylistModel
 
 
 class NullPlayer(BasePlayer):
@@ -17,28 +17,28 @@ class NullPlayer(BasePlayer):
 
     def __init__(self, sinkname="", librarian=None):
         super(NullPlayer, self).__init__()
-        self._set_paused(True)
-        self._source = PlaylistModel()
+        self._paused = True
+        self._source = None
         self._position = 0
+
+    def _destroy(self):
+        pass
 
     def get_position(self):
         """Return the current playback position in milliseconds,
         or 0 if no song is playing."""
         return self._position
 
-    def _set_paused(self, paused):
-        if paused != self._paused:
-            self._paused = paused
-            if self.song:
-                self.emit((paused and 'paused') or 'unpaused')
-            elif paused is True:
-                # Something wants us to pause between songs, or when
-                # we've got no song playing (probably StopAfterMenu).
-                self.emit('paused')
-
-    def _get_paused(self):
+    @property
+    def paused(self):
         return self._paused
-    paused = property(_get_paused, _set_paused)
+
+    @paused.setter
+    def paused(self, paused):
+        if paused == self._paused:
+            return
+        self._paused = paused
+        self.emit((paused and 'paused') or 'unpaused')
 
     def do_set_property(self, property, v):
         if property.name == 'volume':
@@ -56,7 +56,7 @@ class NullPlayer(BasePlayer):
             self.emit('seek', self.song, pos)
         self._position = pos
 
-    def _end(self, stopped):
+    def _end(self, stopped, next_song=None):
         # We need to set self.song to None before calling our signal
         # handlers. Otherwise, if they try to end the song they're given
         # (e.g. by removing it), then we get in an infinite loop.
@@ -64,12 +64,17 @@ class NullPlayer(BasePlayer):
         self.song = self.info = None
         self.emit('song-ended', song, stopped)
 
+        current = self._source.current if next_song is None else next_song
+
         # Then, set up the next song.
-        self.song = self.info = self._source.current
+        self.song = self.info = current
         self.emit('song-started', self.song)
 
         if self.song is None:
             self.paused = True
+
+        if not self.paused and song is None:
+            self.emit("unpaused")
 
         self._position = 0
 

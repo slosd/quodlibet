@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2004-2005 Joe Wreschnig
 #
 # This program is free software; you can redistribute it and/or modify
@@ -15,8 +16,7 @@ from quodlibet.plugins.songsmenu import SongsMenuPlugin
 class IFPUpload(SongsMenuPlugin):
     PLUGIN_ID = "Send to iFP"
     PLUGIN_NAME = _("Send to iFP")
-    PLUGIN_DESC = _("Upload songs to an iRiver iFP device.")
-    PLUGIN_VERSION = "0.12"
+    PLUGIN_DESC = _("Uploads songs to an iRiver iFP device.")
     PLUGIN_ICON = Gtk.STOCK_CONVERT
 
     def plugin_songs(self, songs):
@@ -24,9 +24,9 @@ class IFPUpload(SongsMenuPlugin):
             qltk.ErrorMessage(
                 None, "No iFP device found",
                 "Unable to contact your iFP device. Check "
-                 "that the device is powered on and plugged "
-                 "in, and that you have ifp-line "
-                 "(http://ifp-driver.sf.net) installed.").run()
+                "that the device is powered on and plugged "
+                "in, and that you have ifp-line "
+                "(http://ifp-driver.sf.net) installed.").run()
             return True
         self.__madedir = []
 

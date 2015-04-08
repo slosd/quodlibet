@@ -25,21 +25,18 @@ class Version(tuple):
 
 class MinVersions(object):
     """Dependency requirements for Quod Libet / Ex Falso"""
-    PYTHON = Version(2, 6)
-    MUTAGEN = Version(1, 14)
+    PYTHON = Version(2, 7)
+    MUTAGEN = Version(1, 22)
 
-VERSION_TUPLE = Version(3, 1, -1)
+VERSION_TUPLE = Version(3, 3, -1)
 VERSION = str(VERSION_TUPLE)
-
-PROCESS_TITLE_QL = "quodlibet"
-PROCESS_TITLE_EF = "exfalso"
 
 if os.name == "nt":
     file_path = __file__.decode(sys.getfilesystemencoding())
     BASEDIR = os.path.dirname(os.path.realpath(file_path))
     HOME = windows.get_personal_dir()
     USERDIR = os.path.join(windows.get_appdate_dir(), "Quod Libet")
-    environ = windows.get_environ()
+    environ = windows.WindowsEnviron()
 else:
     BASEDIR = os.path.dirname(os.path.realpath(__file__))
     HOME = os.path.expanduser("~")
@@ -69,28 +66,31 @@ CURRENT = os.path.join(USERDIR, "current")
 LIBRARY = os.path.join(USERDIR, "songs")
 LOGDIR = os.path.join(USERDIR, "logs")
 
-# Don't bother saving the library more often than this
-LIBRARY_SAVE_PERIOD_SECONDS = 15 * 60
-
 # entry point for the user guide / wiki
-BRANCH_NAME = "watched-library"
+BRANCH_NAME = "master"
 DOCS_BASE_URL = "https://quodlibet.readthedocs.org/en/%s"
 DOCS_LATEST = DOCS_BASE_URL % "latest"
-DOCS_BASE_URL %= BRANCH_NAME if BRANCH_NAME != "default" else "latest"
+DOCS_BASE_URL %= BRANCH_NAME if BRANCH_NAME != "master" else "latest"
 ONLINE_HELP = DOCS_BASE_URL + "/guide/index.html"
 SEARCH_HELP = DOCS_BASE_URL + "/guide/searching.html"
-
-# about dialog, --version etc.
-WEBSITE = "http://code.google.com/p/quodlibet"
-COPYRIGHT = """\
-Copyright © 2004-2014 Joe Wreschnig, Michael Urman, Iñigo Serna,
-Steven Robertson, Christoph Reiter, Nick Boultbee, ..."""
 
 # Email used as default for reading/saving per-user data in tags, etc.
 EMAIL = environ.get("EMAIL", "quodlibet@lists.sacredchao.net")
 
 # Displayed as registered / help email address
 SUPPORT_EMAIL = "quod-libet-development@googlegroups.com"
+
+MAIN_AUTHORS = """\
+Joe Wreschnig
+Michael Urman
+Iñigo Serna
+Steven Robertson
+Christoph Reiter
+Nick Boultbee""".split("\n")
+
+# about dialog, --version etc.
+WEBSITE = "https://quodlibet.readthedocs.org/"
+COPYRIGHT = """Copyright © 2004-2015 %s...""" % ", ".join(MAIN_AUTHORS)
 
 AUTHORS = sorted("""\
 Alexandre Passos
@@ -112,6 +112,7 @@ David Schneider
 Decklin Foster
 Eduardo Gonzalez
 Erich Schubert
+Eric Le Lay
 Federico Pelloni
 Felix Krull
 Florian Demmer
@@ -243,67 +244,6 @@ NBP_EXAMPLES = """\
 
 DEBUG = ("--debug" in sys.argv or "QUODLIBET_DEBUG" in environ)
 
-MENU = """<ui>
-  <menubar name='Menu'>
-    <menu action='Music'>
-      <menuitem action='AddFolders' always-show-image='true'/>
-      <menuitem action='AddFiles' always-show-image='true'/>
-      <menuitem action='AddLocation' always-show-image='true'/>
-      <separator/>
-      <menu action='BrowseLibrary' always-show-image='true'>
-      %(browsers)s
-      </menu>
-      <separator/>
-      <menuitem action='Preferences' always-show-image='true'/>
-      <menuitem action='Plugins' always-show-image='true'/>
-      <separator/>
-      <menuitem action='RefreshLibrary' always-show-image='true'/>
-      <separator/>
-      <menuitem action='Quit' always-show-image='true'/>
-    </menu>
-    <menu action='Filters'>
-      <menuitem action='FilterGenre' always-show-image='true'/>
-      <menuitem action='FilterArtist' always-show-image='true'/>
-      <menuitem action='FilterAlbum' always-show-image='true'/>
-      <separator/>
-      <menuitem action='RandomGenre' always-show-image='true'/>
-      <menuitem action='RandomArtist' always-show-image='true'/>
-      <menuitem action='RandomAlbum' always-show-image='true'/>
-      <separator/>
-      <menuitem action='All' always-show-image='true'/>
-      <menuitem action='PlayedRecently' always-show-image='true'/>
-      <menuitem action='AddedRecently' always-show-image='true'/>
-      <menuitem action='TopRated' always-show-image='true'/>
-    </menu>
-    <menu action='Control'>
-      <menuitem action='Previous' always-show-image='true'/>
-      <menuitem action='PlayPause' always-show-image='true'/>
-      <menuitem action='Next' always-show-image='true'/>
-      <menuitem action='StopAfter' always-show-image='true'/>
-      <separator/>
-      <menuitem action='AddBookmark' always-show-image='true'/>
-      <menuitem action='EditBookmarks' always-show-image='true'/>
-      <separator/>
-      <menuitem action='EditTags' always-show-image='true'/>
-      <menuitem action='Information' always-show-image='true'/>
-      <separator/>
-      <menuitem action='Jump' always-show-image='true'/>
-    </menu>
-    <menu action='View'>
-      <menuitem action='SongList' always-show-image='true'/>
-      <menuitem action='Queue' always-show-image='true'/>
-      <separator/>
-      %(views)s
-    </menu>
-    <menu action='Help'>
-      <menuitem action='OnlineHelp' always-show-image='true'/>
-      <menuitem action='SearchHelp' always-show-image='true'/>
-      <menuitem action='About' always-show-image='true'/>
-      %(debug)s
-    </menu>
-  </menubar>
-</ui>"""
-
 try:
     ENCODING = locale.getpreferredencoding()
 except locale.Error:
@@ -315,15 +255,18 @@ else:
     except LookupError:
         ENCODING = "utf-8"
 
-# http://developer.gnome.org/doc/API/2.0/glib/glib-running.html
-if "G_FILENAME_ENCODING" in environ:
-    FSCODING = environ["G_FILENAME_ENCODING"].split(",")[0]
-    if FSCODING == "@locale":
-        FSCODING = ENCODING
-elif "G_BROKEN_FILENAMES" in environ:
-    FSCODING = ENCODING
-else:
+if os.name == "nt":
     FSCODING = "utf-8"
+else:
+    # http://developer.gnome.org/doc/API/2.0/glib/glib-running.html
+    if "G_FILENAME_ENCODING" in environ:
+        FSCODING = environ["G_FILENAME_ENCODING"].split(",")[0]
+        if FSCODING == "@locale":
+            FSCODING = ENCODING
+    elif "G_BROKEN_FILENAMES" in environ:
+        FSCODING = ENCODING
+    else:
+        FSCODING = "utf-8"
 
 del(os)
 del(locale)

@@ -12,15 +12,15 @@ from glob import glob
 
 from gi.repository import Gtk, GLib, GdkPixbuf
 
-from quodlibet import util
 from quodlibet import const
+from quodlibet import app
 
 from quodlibet.devices._base import Device
 from quodlibet.library import SongFileLibrary
-from quodlibet.parse import FileFromPattern
-from quodlibet.qltk import ConfirmAction
-from quodlibet.util.path import (fsencode, mtime, escape_filename,
-    strip_win32_incompat)
+from quodlibet.pattern import FileFromPattern
+from quodlibet.qltk.msg import ConfirmFileReplace
+from quodlibet.util.path import (mtime, escape_filename,
+    strip_win32_incompat_from_path)
 
 CACHE = os.path.join(const.USERDIR, 'cache')
 
@@ -53,7 +53,7 @@ class StorageDevice(Device):
         entry = Gtk.Entry()
         entry.set_text(self['pattern'])
         entry.connect_after('changed', self.__set_pattern)
-        props.append((_("_Filename Pattern:"), entry, 'pattern'))
+        props.append((_("_Filename pattern:"), entry, 'pattern'))
 
         check = Gtk.CheckButton()
         check.set_active(self['covers'])
@@ -85,39 +85,36 @@ class StorageDevice(Device):
         self.__save_library()
         return self.__library.values()
 
-    def copy(self, songlist, song):
+    def contains(self, song):
+        return song in self.__library
+
+    def copy(self, parent_widget, song):
         if not self.__pattern:
             self.__set_pattern()
 
-        utarget = strip_win32_incompat(self.__pattern.format(song))
-        target = fsencode(utarget)
+        target = strip_win32_incompat_from_path(self.__pattern.format(song))
         dirname = os.path.dirname(target)
 
         if os.path.exists(target):
-            if ConfirmAction(
-                songlist, _("File exists"),
-                _("Overwrite <b>%s</b>?") % util.escape(utarget)
-                ).run():
+            dialog = ConfirmFileReplace(parent_widget, target)
+            resp = dialog.run()
+            if resp == ConfirmFileReplace.RESPONSE_REPLACE:
                 try:
                     # Remove the current song
                     self.__library.remove([self.__library[target]])
                 except KeyError:
                     pass
-                model = songlist.get_model()
-                for row in model:
-                    if row[0]['~filename'] == utarget:
-                        model.remove(row.iter)
             else:
                 return False
 
         try:
             if not os.path.isdir(dirname):
                 os.makedirs(dirname)
-            shutil.copyfile(fsencode(song['~filename']), target)
+            shutil.copyfile(song['~filename'], target)
 
             if self['covers']:
                 coverfile = os.path.join(dirname, 'folder.jpg')
-                cover = song.find_cover()
+                cover = app.cover_manager.get_cover(song)
                 if cover and mtime(cover.name) > mtime(coverfile):
                     image = GdkPixbuf.Pixbuf.new_from_file_at_size(
                         cover.name, 200, 200)
@@ -130,12 +127,13 @@ class StorageDevice(Device):
         except (OSError, IOError, GLib.GError), exc:
             return str(exc).decode(const.ENCODING, 'replace')
 
-    def delete(self, songlist, song):
+    def delete(self, parent_widget, song):
         try:
             path = song['~filename']
             dir = os.path.dirname(path)
 
             os.unlink(path)
+            self.__library.remove([song])
 
             if self['unclutter']:
                 files = glob(dir + '/*')
@@ -158,6 +156,7 @@ class StorageDevice(Device):
     def close(self):
         if self.__library:
             self.__library.destroy()
+            self.__library = None
 
     def __load_library(self):
         if self.__library is None:

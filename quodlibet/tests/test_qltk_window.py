@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from tests import TestCase
 
 from quodlibet.qltk.window import Window
@@ -5,6 +6,9 @@ from quodlibet.util import InstanceTracker
 
 
 class TWindows(TestCase):
+
+    def test_ctr(self):
+        Window().destroy()
 
     def test_instance_tracking(self):
 
@@ -23,3 +27,21 @@ class TWindows(TestCase):
         self.assertTrue(SomeWindow.windows)
         other.destroy()
         self.assertFalse(SomeWindow.windows)
+
+    def test_show_maybe(self):
+        Window.prevent_inital_show(True)
+        w = Window()
+        w.show_maybe()
+        self.assertFalse(w.get_visible())
+        Window.prevent_inital_show(False)
+        w.show_maybe()
+        self.assertTrue(w.get_visible())
+
+    def test_use_header_bar(self):
+        w = Window(title="foo")
+        w.use_header_bar()
+        self.assertEqual(w.get_title(), "foo")
+
+        w = Window()
+        w.use_header_bar()
+        self.assertEqual(w.get_title(), None)

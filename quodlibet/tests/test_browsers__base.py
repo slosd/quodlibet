@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006 Joe Wreschnig
 #           2013 Christoph Reiter
 #
@@ -12,16 +13,29 @@ from helper import realized
 
 from quodlibet import browsers
 from quodlibet.formats._audio import AudioFile
+from quodlibet.util.path import fsnative
 from quodlibet import config
 from quodlibet.browsers._base import Browser
 from quodlibet.library import SongFileLibrary, SongLibrarian
 
 
 SONGS = [
-    AudioFile({"title": "one", "artist": "piman", "~filename": "/dev/null"}),
-    AudioFile({"title": "two", "artist": "mu", "~filename": "/dev/zero"}),
-    AudioFile({"title": "three", "artist": "boris", "~filename": "/bin/ls"})
-    ]
+    AudioFile({
+        "title": "one",
+        "artist": "piman",
+        "~filename": fsnative(u"/dev/null"),
+    }),
+    AudioFile({
+        "title": "two",
+        "artist": "mu",
+        "~filename": fsnative(u"/dev/zero"),
+    }),
+    AudioFile({
+        "title": "three",
+        "artist": "boris",
+        "~filename": fsnative(u"/bin/ls"),
+    })
+]
 SONGS.sort()
 
 for song in SONGS:
@@ -38,9 +52,8 @@ class TBrowser(TestCase):
 
     def test_defaults(self):
         self.failUnless(self.browser.background)
-        self.failIf(self.browser.reordered)
+        self.failIf(self.browser.can_reorder)
         self.failIf(self.browser.headers)
-        self.failUnless(self.browser.dynamic(None))
 
     def tearDown(self):
         self.browser = None
@@ -55,12 +68,19 @@ class TBrowserBase(AbstractTestCase):
         library.librarian = SongLibrarian()
         library.add(SONGS)
         self.Kind.init(library)
-        self.b = self.Kind(library, True)
+        self.b = self.Kind(library)
 
     def tearDown(self):
         self.b.destroy()
         self.library.destroy()
         config.quit()
+
+    def test_menu(self):
+        # FIXME: the playlist browser accesses the song list directly
+        if self.b.name == "Playlists":
+            return
+        menu = self.b.Menu([], self.library, [])
+        self.assertTrue(isinstance(menu, Gtk.Menu))
 
     def test_pack_unpack(self):
         to_pack = Gtk.Button()
@@ -87,7 +107,7 @@ class TBrowserBase(AbstractTestCase):
             self.b.activate()
             self.b.statusbar(1000)
             self.b.statusbar(1)
-            song = AudioFile({"~filename": "/fake"})
+            song = AudioFile({"~filename": fsnative(u"/fake")})
             song.sanitize()
             self.b.scroll(song)
 
@@ -99,8 +119,10 @@ class TBrowserBase(AbstractTestCase):
 
     def test_filter_text(self):
         with realized(self.b):
-            self.b.filter("foo", ["bar"])
-            self.b.filter("(((((##!!!!))),", ["(((((##!!!!))),"])
+            if self.b.can_filter_tag("foo"):
+                self.b.filter("foo", ["bar"])
+            if self.b.can_filter_tag("(((((##!!!!))),"):
+                self.b.filter("(((((##!!!!))),", ["(((((##!!!!))),"])
             if self.b.can_filter_text():
                 self.b.filter_text("foo")
                 self.b.filter_text("(((((##!!!!))),,,==")

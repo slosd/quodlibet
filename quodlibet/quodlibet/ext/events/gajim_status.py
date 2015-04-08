@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005-2006 Sergey Fedoseev <fedoseev.sergey@gmail.com>
 # Copyright 2007 Simon Morgan <zen84964@zen.co.uk>
 #
@@ -6,8 +7,9 @@
 # published by the Free Software Foundation.
 
 import os
+import sys
 
-if os.name == "nt":
+if os.name == "nt" or sys.platform == "darwin":
     from quodlibet.plugins import PluginNotSupportedError
     raise PluginNotSupportedError
 
@@ -16,9 +18,8 @@ from string import join
 from gi.repository import Gtk
 import dbus
 
-import quodlibet
 from quodlibet.plugins.events import EventPlugin
-from quodlibet.parse import Pattern
+from quodlibet.pattern import Pattern
 from quodlibet.qltk import Frame
 from quodlibet import config
 
@@ -26,9 +27,8 @@ from quodlibet import config
 class GajimStatusMessage(EventPlugin):
     PLUGIN_ID = 'Gajim status message'
     PLUGIN_NAME = _('Gajim Status Message')
-    PLUGIN_DESC = _("Change Gajim status message according to what "
+    PLUGIN_DESC = _("Changes Gajim status message according to what "
                     "you are currently listening to.")
-    PLUGIN_VERSION = '0.7.4'
 
     c_accounts = __name__ + '_accounts'
     c_paused = __name__ + '_paused'
@@ -60,12 +60,11 @@ class GajimStatusMessage(EventPlugin):
             self.pattern = '<artist> - <title>'
             config.set('plugins', self.c_pattern, self.pattern)
 
-        quodlibet.quit_add(0, self.quit)
-
+    def enabled(self):
         self.interface = None
         self.current = ''
 
-    def quit(self):
+    def disabled(self):
         if self.current != '':
             self.change_status(self.accounts, '')
 
@@ -133,7 +132,7 @@ class GajimStatusMessage(EventPlugin):
         pattern = Gtk.Entry()
         pattern.set_text(self.pattern)
         pattern.connect('changed', self.pattern_changed)
-        pattern_box.pack_start(Gtk.Label("Pattern:"), True, True, 0)
+        pattern_box.pack_start(Gtk.Label(label="Pattern:"), True, True, 0)
         pattern_box.pack_start(pattern, True, True, 0)
 
         accounts_box = Gtk.HBox(spacing=3)
@@ -141,17 +140,18 @@ class GajimStatusMessage(EventPlugin):
         accounts = Gtk.Entry()
         accounts.set_text(join(self.accounts))
         accounts.connect('changed', self.accounts_changed)
-        accounts.set_tooltip_text("List accounts, separated by spaces, for "
-                             "changing status message. If none are specified, "
-                             "status message of all accounts will be changed.")
-        accounts_box.pack_start(Gtk.Label("Accounts:"), True, True, 0)
+        accounts.set_tooltip_text(
+            _("List accounts, separated by spaces, for "
+              "changing status message. If none are specified, "
+              "status message of all accounts will be changed."))
+        accounts_box.pack_start(Gtk.Label(label="Accounts:"), True, True, 0)
         accounts_box.pack_start(accounts, True, True, 0)
 
         c = Gtk.CheckButton(label="Add '[paused]'")
         c.set_active(self.paused)
         c.connect('toggled', self.paused_changed)
-        c.set_tooltip_text("If checked, '[paused]' will be added to "
-                           "status message on pause.")
+        c.set_tooltip_text(_("If checked, '[paused]' will be added to "
+                             "status message on pause."))
 
         table = Gtk.Table()
         self.list = []
@@ -174,8 +174,8 @@ class GajimStatusMessage(EventPlugin):
         vb.pack_start(pattern_box, True, True, 0)
         vb.pack_start(accounts_box, True, True, 0)
         vb.pack_start(c, True, True, 0)
-        vb.pack_start(Frame(label="Statuses for which status message\n"
-                                  "will be changed"), True, True, 0)
+        vb.pack_start(Frame(label=_("Statuses for which status message\n"
+                                    "will be changed")), True, True, 0)
         vb.pack_start(table, True, True, 0)
 
         return vb

@@ -27,7 +27,8 @@ from quodlibet.qltk.getstring import GetStringDialog
 from quodlibet.qltk.msg import ErrorMessage
 from quodlibet.qltk.songsmenu import SongsMenu
 from quodlibet.qltk.views import AllTreeView
-from quodlibet.qltk.x import ScrolledWindow, Alignment, Button
+from quodlibet.util import connect_obj
+from quodlibet.qltk.x import ScrolledWindow, Align, Button
 
 
 FEEDS = os.path.join(const.USERDIR, "feeds")
@@ -222,11 +223,12 @@ class AudioFeeds(Browser, Gtk.VBox):
     name = _("Audio Feeds")
     accelerated_name = _("_Audio Feeds")
     priority = 20
+    uses_main_library = False
 
     __last_folder = const.HOME
 
     def pack(self, songpane):
-        container = qltk.RHPaned()
+        container = qltk.ConfigRHPaned("browsers", "audiofeeds_pos", 0.4)
         self.show()
         container.pack1(self, True, False)
         container.pack2(songpane, True, False)
@@ -288,20 +290,20 @@ class AudioFeeds(Browser, Gtk.VBox):
         klass.write()
         GLib.timeout_add(60 * 60 * 1000, klass.__do_check)
 
-    def Menu(self, songs, songlist, library):
-        menu = SongsMenu(library, songs, parent=self)
+    def Menu(self, songs, library, items):
         if len(songs) == 1:
-            item = qltk.MenuItem(_("_Download..."), Gtk.STOCK_CONNECT)
+            item = qltk.MenuItem(_(u"_Download…"), Gtk.STOCK_CONNECT)
             item.connect('activate', self.__download, songs[0]("~uri"))
             item.set_sensitive(not songs[0].is_file)
         else:
             songs = filter(lambda s: not s.is_file, songs)
             uris = [song("~uri") for song in songs]
-            item = qltk.MenuItem(_("_Download..."), Gtk.STOCK_CONNECT)
+            item = qltk.MenuItem(_(u"_Download…"), Gtk.STOCK_CONNECT)
             item.connect('activate', self.__download_many, uris)
             item.set_sensitive(bool(songs))
-        menu.preseparate()
-        menu.prepend(item)
+
+        items.append([item])
+        menu = SongsMenu(library, songs, items=items)
         return menu
 
     def __download_many(self, activator, sources):
@@ -343,7 +345,7 @@ class AudioFeeds(Browser, Gtk.VBox):
                 DownloadWindow.download(source, target, self)
         chooser.destroy()
 
-    def __init__(self, library, main):
+    def __init__(self, library):
         super(AudioFeeds, self).__init__(spacing=6)
 
         self.__view = view = AllTreeView()
@@ -378,9 +380,9 @@ class AudioFeeds(Browser, Gtk.VBox):
         view.connect('drag-motion', self.__drag_motion)
         view.connect('drag-leave', self.__drag_leave)
 
-        self.connect_object('destroy', self.__save, view)
+        connect_obj(self, 'destroy', self.__save, view)
 
-        self.pack_start(Alignment(new, left=3, bottom=3), False, True, 0)
+        self.pack_start(Align(new, left=3, bottom=3), False, True, 0)
 
         for child in self.get_children():
             child.show_all()
@@ -422,9 +424,9 @@ class AudioFeeds(Browser, Gtk.VBox):
         else:
             ErrorMessage(
                 self, _("Unable to add feed"),
-                _("<b>%s</b> could not be added. The server may be down, "
+                _("%s could not be added. The server may be down, "
                   "or the location may not be an audio feed.") %
-                util.escape(feed.uri)).run()
+                util.bold(util.escape(feed.uri))).run()
 
     def __popup_menu(self, view):
         model, paths = view.get_selection().get_selected_rows()
@@ -432,9 +434,9 @@ class AudioFeeds(Browser, Gtk.VBox):
         refresh = Gtk.ImageMenuItem(Gtk.STOCK_REFRESH, use_stock=True)
         delete = Gtk.ImageMenuItem(Gtk.STOCK_DELETE, use_stock=True)
 
-        refresh.connect_object(
+        connect_obj(refresh,
             'activate', self.__refresh, [model[p][0] for p in paths])
-        delete.connect_object(
+        connect_obj(delete,
             'activate', map, model.remove, map(model.get_iter, paths))
 
         menu.append(refresh)
@@ -464,7 +466,7 @@ class AudioFeeds(Browser, Gtk.VBox):
             for path in paths:
                 model[path][0].changed = False
                 songs.extend(model[path][0])
-            self.emit('songs-selected', songs, True)
+            self.songs_selected(songs, True)
             config.set("browsers", "audiofeeds",
                        "\t".join([model[path][0].name for path in paths]))
 
@@ -478,9 +480,9 @@ class AudioFeeds(Browser, Gtk.VBox):
             else:
                 ErrorMessage(
                     self, _("Unable to add feed"),
-                    _("<b>%s</b> could not be added. The server may be down, "
+                    _("%s could not be added. The server may be down, "
                       "or the location may not be an audio feed.") %
-                    util.escape(feed.uri)).run()
+                    util.bold(util.escape(feed.uri))).run()
 
     def restore(self):
         try:

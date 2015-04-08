@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -7,7 +8,7 @@
 import os
 import subprocess
 
-from tests import TestCase, AbstractTestCase, mkstemp
+from tests import AbstractTestCase, mkstemp
 
 
 QLDATA_DIR = os.path.join(os.path.dirname(

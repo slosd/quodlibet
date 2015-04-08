@@ -8,7 +8,9 @@
 from os import path, makedirs
 from hashlib import sha1
 
-from gi.repository import GObject, GLib
+from gi.repository import GObject
+
+from quodlibet.util.path import escape_filename, xdg_get_cache_home
 
 
 class CoverSourcePlugin(GObject.Object):
@@ -31,10 +33,26 @@ class CoverSourcePlugin(GObject.Object):
         'search-complete': (GObject.SignalFlags.RUN_LAST, None, (object,))
     }
 
+    embedded = False
+    """Whether the source is an embedded one"""
+
     def __init__(self, song, cancellable=None):
         self.song = song
         self.cancellable = cancellable
         super(CoverSourcePlugin, self).__init__()
+
+    @classmethod
+    def group_by(cls, song):
+        """Returns a hashable for a song, for grouping songs in groups where
+        only one song per group needs to be searched.
+
+        Grouping might reduce the chance of finding covers in exchange
+        for performance.
+
+        This default implementation gives one group for all songs.
+        """
+
+        return
 
     @staticmethod
     def priority():
@@ -49,9 +67,7 @@ class CoverSourcePlugin(GObject.Object):
 
         There's a table of value ranges sources should respect:
 
-        * (0.9, 1.0] - user's preferred methods (set by configuration; example:
-                       preferring embed cover art);
-        * (0.7, 0.9] - local covers;
+        * (0.7, 1.0] - local covers;
         * (0.4, 0.7] - accurate (> 99%) source of high quality (>= 200x200)
                        covers;
         * (0.2, 0.4] - accurate (> 99%) source of low quality (< 200x200)
@@ -83,7 +99,7 @@ class CoverSourcePlugin(GObject.Object):
         key = sha1()
         # Should be fine as long as the same interpreter is used.
         key.update(repr(self.song.album_key))
-        return key.hexdigest()
+        return escape_filename(key.hexdigest())
 
     @property
     def cover_path(self):
@@ -94,7 +110,6 @@ class CoverSourcePlugin(GObject.Object):
 
         It doesn't necessarily mean the cover is actually at the returned
         location neither that it will be stored there at any later time.
-
         """
         return path.join(self.cover_directory, self.cover_filename)
 
@@ -149,7 +164,8 @@ class CoverSourcePlugin(GObject.Object):
         self.emit('fetch-failure', message)
 
 
-cover_dir = path.join(GLib.get_user_cache_dir(), 'quodlibet', 'covers')
+cover_dir = path.join(xdg_get_cache_home(), 'quodlibet', 'covers')
+
 try:
     makedirs(cover_dir)
 except OSError:

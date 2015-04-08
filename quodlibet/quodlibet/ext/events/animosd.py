@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright (C) 2012-13 Nick Boultbee, Thomas Vogt
 # Copyright (C) 2008 Andreas Bombe
 # Copyright (C) 2005  Michael Urman
@@ -24,10 +25,11 @@ from math import pi
 from quodlibet import config, qltk, app
 from quodlibet.qltk.textedit import PatternEdit
 from quodlibet.formats import DUMMY_SONG
-from quodlibet import parse
+from quodlibet import pattern
 from quodlibet.plugins.events import EventPlugin
 from quodlibet.plugins import PluginConfigMixin
 from quodlibet.util.dprint import print_d, print_w
+from quodlibet.util import connect_obj
 
 
 class ConfigLabel(Gtk.Label):
@@ -58,7 +60,7 @@ class OSDWindow(Gtk.Window):
         self.fading_in = False
         self.fade_start_time = 0
 
-        cover = song.find_cover()
+        cover = app.cover_manager.get_cover(song)
         try:
             if cover is not None:
                 cover = GdkPixbuf.Pixbuf.new_from_file(cover.name)
@@ -87,8 +89,8 @@ class OSDWindow(Gtk.Window):
         layout.set_spacing(Pango.SCALE * 7)
         layout.set_font_description(Pango.FontDescription(conf.font))
         try:
-            layout.set_markup(parse.XMLFromMarkupPattern(conf.string) % song)
-        except parse.error:
+            layout.set_markup(pattern.XMLFromMarkupPattern(conf.string) % song)
+        except pattern.error:
             layout.set_markup("")
         layout.set_width(Pango.SCALE * textwidth)
         layoutsize = layout.get_pixel_size()
@@ -306,8 +308,8 @@ class OSDWindow(Gtk.Window):
 class AnimOsd(EventPlugin, PluginConfigMixin):
     PLUGIN_ID = "Animated On-Screen Display"
     PLUGIN_NAME = _("Animated On-Screen Display")
-    PLUGIN_DESC = _("Display song information on your screen when it changes.")
-    PLUGIN_VERSION = "1.3"
+    PLUGIN_DESC = _("Displays song information on your screen when it "
+                    "changes.")
     # Retain compatibility with old configuration
     CONFIG_SECTION = 'animosd'
 
@@ -405,7 +407,7 @@ class AnimOsd(EventPlugin, PluginConfigMixin):
             w = PatternEdit(button, AnimOsd.ConfDef.string)
             w.set_default_size(520, 260)
             w.text = self.Conf.string
-            w.apply.connect_object_after('clicked', set_string, w)
+            connect_obj(w.apply, 'clicked', set_string, w)
             w.show()
 
         def set_string(window):
@@ -455,7 +457,7 @@ class AnimOsd(EventPlugin, PluginConfigMixin):
         vb.pack_start(frame, False, True, 0)
 
         def build_text_widget():
-            t = Gtk.Table(2, 2)
+            t = Gtk.Table(n_rows=2, n_columns=2)
             t.set_col_spacings(6)
             t.set_row_spacings(3)
 
@@ -483,7 +485,7 @@ class AnimOsd(EventPlugin, PluginConfigMixin):
         vb.pack_start(frame, False, True, 0)
 
         def build_colors_widget():
-            t = Gtk.Table(2, 2)
+            t = Gtk.Table(n_rows=2, n_columns=2)
             t.set_col_spacings(6)
             t.set_row_spacings(3)
             b = Gtk.ColorButton(
@@ -511,12 +513,12 @@ class AnimOsd(EventPlugin, PluginConfigMixin):
             vb2 = Gtk.VBox(spacing=3)
             hb = Gtk.HBox(spacing=6)
             toggles = [
-                ("_Shadows", self.Conf.shadow[0], change_shadow),
-                ("_Outline", self.Conf.outline[0], change_outline),
-                ("Rou_nded Corners", self.Conf.corners - 1, change_rounded)]
+                (_("_Shadows"), self.Conf.shadow[0], change_shadow),
+                (_("_Outline"), self.Conf.outline[0], change_outline),
+                (_("Rou_nded Corners"), self.Conf.corners - 1, change_rounded)]
 
             for (label, current, callback) in toggles:
-                checkb = Gtk.CheckButton(label, use_underline=True)
+                checkb = Gtk.CheckButton(label=label, use_underline=True)
                 checkb.set_active(current != -1)
                 checkb.connect("toggled", callback)
                 hb.pack_start(checkb, True, True, 0)
@@ -524,12 +526,12 @@ class AnimOsd(EventPlugin, PluginConfigMixin):
 
             hb = Gtk.HBox(spacing=6)
             timeout = Gtk.SpinButton(
-                adjustment=Gtk.Adjustment(
+                adjustment=Gtk.Adjustment.new(
                     self.Conf.delay / 1000.0, 0, 60, 0.1, 1.0, 0),
                 climb_rate=0.1, digits=1)
             timeout.set_numeric(True)
             timeout.connect('value-changed', change_delay)
-            l1 = ConfigLabel("_Delay:", timeout)
+            l1 = ConfigLabel(_("_Delay:"), timeout)
             hb.pack_start(l1, False, True, 0)
             hb.pack_start(timeout, False, True, 0)
             vb2.pack_start(hb, False, True, 0)
@@ -541,11 +543,11 @@ class AnimOsd(EventPlugin, PluginConfigMixin):
 
         def build_buttons_widget():
             hb = Gtk.HBox(spacing=6)
-            edit_button = qltk.Button(_("Ed_it Display Pattern..."),
+            edit_button = qltk.Button(_(u"Ed_it Display Pattern…"),
                                       Gtk.STOCK_EDIT)
             edit_button.connect('clicked', edit_pattern)
             hb.pack_start(edit_button, False, True, 0)
-            preview_button = Gtk.Button(_("Preview"))
+            preview_button = Gtk.Button(label=_("Preview"))
             preview_button.connect("button-press-event", on_button_pressed)
             hb.pack_start(preview_button, False, True, 0)
             return hb

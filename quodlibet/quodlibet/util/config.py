@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2004-2008 Joe Wreschnig
 #           2009-2013 Nick Boultbee
 #           2011-2014 Christoph Reiter
@@ -16,6 +17,7 @@ import csv
 from ConfigParser import RawConfigParser as ConfigParser, Error
 
 from quodlibet.util import atomic_save
+from quodlibet.util.string import join_escape, split_escape
 from quodlibet.util.path import is_fsnative, mkdir
 
 
@@ -27,14 +29,67 @@ class _sorted_dict(dict):
         return sorted(super(_sorted_dict, self).items())
 
 
+_DEFAULT = object()
+
+
 class Config(object):
     """A wrapper around RawConfigParser"""
 
-    def __init__(self):
-        """Use read() to read in an existing config file"""
+    def __init__(self, version=None):
+        """Use read() to read in an existing config file.
+
+        version should be an int starting with 0 that gets incremented if you
+        want to register a new upgrade function. If None, upgrade is disabled.
+        """
 
         self._config = ConfigParser(dict_type=_sorted_dict)
+        self._version = version
+        self._loaded_version = None
+        self._upgrade_funcs = []
         self._initial = {}
+
+    def _do_upgrade(self, func):
+        assert self._loaded_version is not None
+        assert self._version is not None
+
+        old_version = self._loaded_version
+        new_version = self._version
+        if old_version != new_version:
+            print_d("Config upgrade: %d->%d (%r)" % (
+                old_version, new_version, func))
+            func(self, old_version, new_version)
+
+    def get_version(self):
+        """Get the version of the loaded config file (for testing only)
+
+        Raises Error if no file was loaded or versioning is disabled.
+        """
+
+        if self._version is None:
+            raise Error("Versioning disabled")
+
+        if self._loaded_version is None:
+            raise Error("No file loaded")
+
+        return self._loaded_version
+
+    def register_upgrade_function(self, function):
+        """Register an upgrade function that gets called at each read()
+        if the current config version and the loaded version don't match.
+
+        Can also be registered after read was called.
+
+        function(config, old_version: int, new_version: int) -> None
+        """
+
+        if self._version is None:
+            raise Error("Versioning disabled")
+
+        self._upgrade_funcs.append(function)
+        # after read(), so upgrade now
+        if self._loaded_version is not None:
+            self._do_upgrade(function)
+        return function
 
     def set_inital(self, section, option, value):
         """Set an initial value for an option.
@@ -62,82 +117,79 @@ class Config(object):
 
         return self._config.options(section)
 
-    def get(self, *args):
+    def get(self, section, option, default=_DEFAULT):
         """get(section, option[, default]) -> str
 
         If default is not given, raises Error in case of an error
         """
 
-        if len(args) == 3:
-            try:
-                return self._config.get(*args[:2])
-            except Error:
-                return args[-1]
-        return self._config.get(*args)
+        try:
+            return self._config.get(section, option)
+        except Error:
+            if default is _DEFAULT:
+                raise
+            return default
 
-    def getboolean(self, *args):
+    def getboolean(self, section, option, default=_DEFAULT):
         """getboolean(section, option[, default]) -> bool
 
         If default is not given, raises Error in case of an error
         """
 
-        if len(args) == 3:
-            if not isinstance(args[-1], bool):
+        try:
+            return self._config.getboolean(section, option)
+        except Error:
+            if default is _DEFAULT:
+                raise
+            if not isinstance(default, bool):
                 raise ValueError
-            try:
-                return self._config.getboolean(*args[:2])
-            # ValueError if the value found in the config file
-            # does not match any string representation -> so catch it too
-            except (ValueError, Error):
-                return args[-1]
-        return self._config.getboolean(*args)
+            return default
 
-    def getint(self, *args):
+    def getint(self, section, option, default=_DEFAULT):
         """getint(section, option[, default]) -> int
 
         If default is not give, raises Error in case of an error
         """
 
-        if len(args) == 3:
-            if not isinstance(args[-1], int):
+        try:
+            return self._config.getint(section, option)
+        except Error:
+            if default is _DEFAULT:
+                raise
+            if not isinstance(default, int):
                 raise ValueError
-            try:
-                return self._config.getint(*args[:2])
-            except Error:
-                return args[-1]
-        return self._config.getint(*args)
+            return default
 
-    def getfloat(self, *args):
+    def getfloat(self, section, option, default=_DEFAULT):
         """getfloat(section, option[, default]) -> float
 
         If default is not give, raises Error in case of an error
         """
 
-        if len(args) == 3:
-            if not isinstance(args[-1], float):
+        try:
+            return self._config.getfloat(section, option)
+        except Error:
+            if default is _DEFAULT:
+                raise
+            if not isinstance(default, float):
                 raise ValueError
-            try:
-                return self._config.getfloat(*args[:2])
-            except Error:
-                return args[-1]
-        return self._config.getfloat(*args)
+            return default
 
-    def getstringlist(self, *args):
+    def getstringlist(self, section, option, default=_DEFAULT):
         """getstringlist(section, option[, default]) -> list
 
         If default is not given, raises Error in case of an error.
         Gets a list of strings, using CSV to parse and delimit.
         """
 
-        if len(args) == 3:
-            if not isinstance(args[-1], list):
+        try:
+            value = self._config.get(section, option)
+        except Error:
+            if default is _DEFAULT:
+                raise
+            if not isinstance(default, list):
                 raise ValueError
-            try:
-                value = self._config.get(*args[:2])
-            except Error:
-                return args[-1]
-        else:
-            value = self._config.get(*args)
+            return default
 
         parser = csv.reader(
             [value], lineterminator='\n', quoting=csv.QUOTE_MINIMAL)
@@ -156,6 +208,27 @@ class Config(object):
         writer = csv.writer(sw, lineterminator='\n', quoting=csv.QUOTE_MINIMAL)
         writer.writerow(values)
         self._config.set(section, option, sw.getvalue())
+
+    def setlist(self, section, option, values, sep=","):
+        """Saves a list of str using ',' as a separator and \\ for escaping"""
+
+        values = map(str, values)
+        joined = join_escape(values, sep)
+        self._config.set(section, option, joined)
+
+    def getlist(self, section, option, default=_DEFAULT, sep=","):
+        """Returns a str list saved with setlist()"""
+
+        try:
+            value = self._config.get(section, option)
+        except Error:
+            if default is _DEFAULT:
+                raise
+            if not isinstance(default, list):
+                raise ValueError
+            return default
+
+        return split_escape(value, sep)
 
     def set(self, section, option, value):
         """Saves the string representation for the passed value
@@ -188,8 +261,16 @@ class Config(object):
 
         mkdir(os.path.dirname(filename))
 
-        with atomic_save(filename, ".tmp", "wb") as fileobj:
-            self._config.write(fileobj)
+        # temporary set the new version for saving
+        if self._version is not None:
+            self.add_section("__config__")
+            self.set("__config__", "version", self._version)
+        try:
+            with atomic_save(filename, ".tmp", "wb") as fileobj:
+                self._config.write(fileobj)
+        finally:
+            if self._loaded_version is not None:
+                self.set("__config__", "version", self._loaded_version)
 
     def clear(self):
         """Remove all sections and initial values"""
@@ -210,7 +291,13 @@ class Config(object):
         Can raise EnvironmentError, Error.
         """
 
-        self._config.read(filename)
+        parsed_filenames = self._config.read(filename)
+
+        # don't upgrade if we just created a new config
+        if parsed_filenames and self._version is not None:
+            self._loaded_version = self.getint("__config__", "version", -1)
+            for func in self._upgrade_funcs:
+                self._do_upgrade(func)
 
     def sections(self):
         """Return a list of the sections available"""

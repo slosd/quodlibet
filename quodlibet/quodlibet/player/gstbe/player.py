@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2004-2011 Joe Wreschnig, Michael Urman, Steven Robertson,
 #           2011-2014 Christoph Reiter
 #
@@ -14,15 +15,14 @@ except ValueError, e:
 
 from gi.repository import Gst, GLib, GstPbutils
 
-import threading
-
 from quodlibet import const
 from quodlibet import config
+from quodlibet import util
 
-from quodlibet.util import fver, sanitize_tags
+from quodlibet.util import fver, sanitize_tags, MainRunner, MainRunnerError, \
+    MainRunnerAbortedError, MainRunnerTimeoutError
 from quodlibet.player import PlayerError
 from quodlibet.player._base import BasePlayer
-from quodlibet.qltk.msg import ErrorMessage
 from quodlibet.qltk.notif import Task
 
 from .util import (parse_gstreamer_taglist, TagListWrapper, iter_to_list,
@@ -129,7 +129,8 @@ class BufferingWrapper(object):
         # so call every time but ignore the result in the inhibit case
         res = self.bin.get_state(*args, **kwargs)
         if self._inhibit_play:
-            return self._wanted_state
+            return (Gst.StateChangeReturn.SUCCESS,
+                    self._wanted_state, Gst.State.VOID_PENDING)
         return res
 
     def destroy(self):
@@ -140,6 +141,7 @@ class BufferingWrapper(object):
             self.__bus_id = None
 
         self.__set_inhibit_play(False)
+        self.bin = None
 
 
 class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
@@ -157,6 +159,7 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
 
     __atf_id = None
     __bus_id = None
+    __source_setup_id = None
 
     __info_buffer = None
 
@@ -169,15 +172,19 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
         self.version_info = "GStreamer: %s" % fver(Gst.version())
         self._librarian = librarian
         self._pipeline_desc = None
-        librarian.connect("changed", self.__songs_changed)
+        self._lib_id = librarian.connect("changed", self.__songs_changed)
         self._active_seeks = []
+        self._active_error = False
+        self._runner = MainRunner()
 
     def __songs_changed(self, librarian, songs):
         # replaygain values might have changed, recalc volume
         if self.song and self.song in songs:
             self.volume = self.volume
 
-    def destroy(self):
+    def _destroy(self):
+        self._librarian.disconnect(self._lib_id)
+        self._runner.abort()
         self.__destroy_pipeline()
 
     @property
@@ -213,6 +220,9 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
 
         if self.bin:
             return True
+
+        # reset error state
+        self.error = False
 
         pipeline = config.get("player", "gst_pipeline")
         try:
@@ -331,7 +341,7 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                     pass
                 else:
                     break
-        self.bin.connect("source-setup", source_setup)
+        self.__source_setup_id = self.bin.connect("source-setup", source_setup)
 
         # ReplayGain information gets lost when destroying
         self.volume = self.volume
@@ -348,15 +358,21 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
             bus = self.bin.get_bus()
             bus.disconnect(self.__bus_id)
             bus.remove_signal_watch()
-            self.__bus_id = False
+            self.__bus_id = None
 
         if self.__atf_id:
             self.bin.disconnect(self.__atf_id)
-            self.__atf_id = False
+            self.__atf_id = None
+
+        if self.__source_setup_id:
+            self.bin.disconnect(self.__source_setup_id)
+            self.__source_setup_id = None
 
         if self.bin:
             self.bin.set_state(Gst.State.NULL)
             self.bin.get_state(timeout=STATE_CHANGE_TIMEOUT)
+            self.bin.set_property('audio-sink', None)
+            self.bin.set_property('video-sink', None)
             # BufferingWrapper cleanup
             self.bin.destroy()
             self.bin = None
@@ -418,8 +434,24 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
 
             if message_name == "missing-plugin":
                 self.__handle_missing_plugin(message)
-
-        return True
+        elif message.type == Gst.MessageType.CLOCK_LOST:
+            print_d("Clock lost")
+            self.bin.set_state(Gst.State.PAUSED)
+            self.bin.set_state(Gst.State.PLAYING)
+        elif message.type == Gst.MessageType.LATENCY:
+            print_d("Recalculate latency")
+            self.bin.recalculate_latency()
+        elif message.type == Gst.MessageType.REQUEST_STATE:
+            state = message.parse_request_state()
+            print_d("State requested: %s" % Gst.Element.state_get_name(state))
+            self.bin.set_state(state)
+        elif message.type == Gst.MessageType.DURATION_CHANGED:
+            if self.song.fill_length:
+                ok, p = self.bin.query_duration(Gst.Format.TIME)
+                if ok:
+                    p /= float(Gst.SECOND)
+                    self.song["~#length"] = p
+                    librarian.changed([self.song])
 
     def __handle_missing_plugin(self, message):
         get_installer_detail = \
@@ -450,33 +482,64 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                 GstPbutils.InstallPluginsReturn.INTERNAL_FAILURE):
             self._error(PlayerError(title, error_details))
 
-    def __about_to_finish(self, pipeline):
-        print_d("About to finish")
+    def __about_to_finish_sync(self):
+        """Returns a tuple (ok, next_song). ok is True if the next song
+        should be set.
+        """
+
+        print_d("About to finish (sync)")
+
+        # Chained oggs falsely trigger a gapless transition.
+        # At least for radio streams we can safely ignore it because
+        # transitions don't occur there.
+        # https://github.com/quodlibet/quodlibet/issues/1454
+        # https://bugzilla.gnome.org/show_bug.cgi?id=695474
+        if self.song.multisong:
+            print_d("multisong: ignore about to finish")
+            return (False, None)
 
         if config.getboolean("player", "gst_disable_gapless"):
             print_d("Gapless disabled")
-            return
+            return (False, None)
 
         # this can trigger twice, see issue 987
         if self._in_gapless_transition:
-            return
+            return (False, None)
         self._in_gapless_transition = True
 
-        def change_in_main_loop(event, source):
-            source.next_ended()
-            event.set()
+        print_d("Select next song in mainloop..")
+        self._source.next_ended()
+        print_d("..done.")
 
-        # push in the main loop and wait for it to finish
-        event = threading.Event()
-        GLib.idle_add(change_in_main_loop, event, self._source,
-                         priority=GLib.PRIORITY_HIGH)
-        event.wait()
+        return (True, self._source.current)
 
-        song = self._source.current
-        bin = self.bin
+    def __about_to_finish(self, playbin):
+        print_d("About to finish (async)")
 
-        if song and bin:
-            bin.set_property('uri', song("~uri"))
+        try:
+            ok, song = self._runner.call(self.__about_to_finish_sync,
+                                         priority=GLib.PRIORITY_HIGH,
+                                         timeout=0.5)
+        except MainRunnerTimeoutError as e:
+            # Due to some locks being held during this signal we can get
+            # into a deadlock when a seek or state change event happens
+            # in the mainloop before our function gets scheduled.
+            # In this case abort and do nothing, which results
+            # in a non-gapless transition.
+            print_d("About to finish (async): %s" % e)
+            return
+        except MainRunnerAbortedError:
+            print_d("About to finish (async): %s" % e)
+            return
+        except MainRunnerError:
+            util.print_exc()
+            return
+
+        if ok:
+            print_d("About to finish (async): setting uri")
+            uri = song("~uri") if song is not None else None
+            playbin.set_property('uri', uri)
+        print_d("About to finish (async): done")
 
     def stop(self):
         super(GStreamerPlayer, self).stop()
@@ -502,6 +565,11 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
 
         p = self._last_position
         if self.song and self.bin:
+            # While we are actively seeking return the last wanted position.
+            # query_position() returns 0 while in this state
+            if self._active_seeks:
+                return self._active_seeks[-1][1]
+
             ok, p = self.bin.query_position(Gst.Format.TIME)
             if ok:
                 p //= Gst.MSECOND
@@ -510,22 +578,28 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                 self._last_position = p
         return p
 
-    def _set_paused(self, paused):
+    @property
+    def paused(self):
+        return self._paused
+
+    @paused.setter
+    def paused(self, paused):
         if paused == self._paused:
             return
-        self._paused = paused
 
-        if not self.song:
-            if paused:
-                # Something wants us to pause between songs, or when
-                # we've got no song playing (probably StopAfterMenu).
-                self.emit('paused')
-                self.__destroy_pipeline()
+        self._paused = paused
+        self.emit((paused and 'paused') or 'unpaused')
+        # in case a signal handler changed the paused state, abort this
+        if self._paused != paused:
             return
 
         if paused:
             if self.bin:
-                if self.song.is_file:
+                if not self.song:
+                    # Something wants us to pause between songs, or when
+                    # we've got no song playing (probably StopAfterMenu).
+                    self.__destroy_pipeline()
+                elif self.song.is_file:
                     # fast path
                     self.bin.set_state(Gst.State.PAUSED)
                 else:
@@ -540,17 +614,8 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                         # destroy so that we rebuffer on resume
                         self.__destroy_pipeline()
         else:
-            if self.bin:
+            if self.song and self.__init_pipeline():
                 self.bin.set_state(Gst.State.PLAYING)
-            else:
-                if self.__init_pipeline():
-                    self.bin.set_state(Gst.State.PLAYING)
-
-        self.emit((paused and 'paused') or 'unpaused')
-
-    def _get_paused(self):
-        return self._paused
-    paused = property(_get_paused, _set_paused)
 
     def _error(self, player_error):
         """Destroy the pipeline and set the error state.
@@ -559,8 +624,9 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
         """
 
         # prevent recursive errors
-        if self.error:
+        if self._active_error:
             return
+        self._active_error = True
 
         self.__destroy_pipeline()
         self.error = True
@@ -568,6 +634,7 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
 
         print_w(unicode(player_error))
         self.emit('error', self.song, player_error)
+        self._active_error = False
 
     def seek(self, pos):
         """Seek to a position in the song, in milliseconds."""
@@ -599,7 +666,7 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                 # event here and emit in the bus message callback.
                 self._active_seeks.append((self.song, pos))
 
-    def _end(self, stopped):
+    def _end(self, stopped, next_song=None):
         print_d("End song")
         song, info = self.song, self.info
 
@@ -616,11 +683,10 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
             self.emit('song-ended', info, stopped)
         self.emit('song-ended', song, stopped)
 
-        # reset error state
-        self.error = False
+        current = self._source.current if next_song is None else next_song
 
         # Then, set up the next song.
-        self.song = self.info = self._source.current
+        self.song = self.info = current
         self.emit('song-started', self.song)
 
         print_d("Next song")
@@ -636,6 +702,9 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                 if self.paused:
                     self.bin.set_state(Gst.State.PAUSED)
                 else:
+                    # something unpaused while no song was active
+                    if song is None:
+                        self.emit("unpaused")
                     self.bin.set_state(Gst.State.PLAYING)
         else:
             self.__destroy_pipeline()

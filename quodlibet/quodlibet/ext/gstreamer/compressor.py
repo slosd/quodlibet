@@ -11,7 +11,6 @@ from quodlibet.plugins import PluginImportException
 from quodlibet.plugins.gstelement import GStreamerPlugin
 from quodlibet import qltk
 from quodlibet import config
-from quodlibet.util import gobject_weak
 
 
 _PLUGIN_ID = "compressor"
@@ -47,7 +46,7 @@ class Preferences(Gtk.VBox):
     def __init__(self):
         super(Preferences, self).__init__(spacing=12)
 
-        table = Gtk.Table(2, 2)
+        table = Gtk.Table(n_rows=2, n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
@@ -65,7 +64,7 @@ class Preferences(Gtk.VBox):
                          Gtk.AttachOptions.SHRINK)
 
         threshold_scale = Gtk.HScale(
-            adjustment=Gtk.Adjustment(0, 0, 1, 0.01, 0.1))
+            adjustment=Gtk.Adjustment.new(0, 0, 1, 0.01, 0.1, 0))
         threshold_scale.set_digits(2)
         labels["threshold"].set_mnemonic_widget(threshold_scale)
         threshold_scale.set_value_pos(Gtk.PositionType.RIGHT)
@@ -82,7 +81,8 @@ class Preferences(Gtk.VBox):
         threshold_scale.connect('value-changed', threshold_changed)
         threshold_scale.set_value(get_cfg("threshold"))
 
-        ratio_scale = Gtk.HScale(adjustment=Gtk.Adjustment(0, 0, 1, 0.01, 0.1))
+        ratio_scale = Gtk.HScale(
+            adjustment=Gtk.Adjustment.new(0, 0, 1, 0.01, 0.1, 0))
         ratio_scale.set_digits(2)
         labels["ratio"].set_mnemonic_widget(ratio_scale)
         ratio_scale.set_value_pos(Gtk.PositionType.RIGHT)
@@ -102,7 +102,7 @@ class Preferences(Gtk.VBox):
 class Compressor(GStreamerPlugin):
     PLUGIN_ID = _PLUGIN_ID
     PLUGIN_NAME = _("Audio Compressor")
-    PLUGIN_DESC = _("Change the amplitude of all samples above a specific "
+    PLUGIN_DESC = _("Changes the amplitude of all samples above a specific "
                     "threshold with a specific ratio.")
     PLUGIN_ICON = "audio-volume-high"
 
@@ -120,7 +120,7 @@ class Compressor(GStreamerPlugin):
     @classmethod
     def PluginPreferences(cls, window):
         prefs = Preferences()
-        gobject_weak(prefs.connect, "changed", lambda *x: cls.queue_update())
+        prefs.connect("changed", lambda *x: cls.queue_update())
         return prefs
 
 

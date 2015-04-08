@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013, 2014 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -36,15 +37,28 @@ class _ModelMixin(object):
     Set to False if you know what you're doing.
     """
 
-    def get_value(self, iter_, column=0):
-        res = super(_ModelMixin, self).get_value(iter_, column)
+    def get_value(self, iter_, column=0,
+            _value_type=GObject.Value,
+            _base=Gtk.TreeModel.get_value):
+
+        res = _base(self, iter_, column)
         # PyGObject 3.4 doesn't unbox in some cases...
-        if isinstance(res, GObject.Value):
+        if isinstance(res, _value_type):
             res = res.get_boxed()
         return res
 
     def get_n_columns(self):
         return 1
+
+    def iter_changed(self, iter_):
+        """Like row_changed(), but only needs a Gtk.TreeIter"""
+
+        self.row_changed(self.get_path(iter_), iter_)
+
+    def path_changed(self, path):
+        """Like row_changed(), but only needs a Gtk.TreePath"""
+
+        self.row_changed(path, self.get_iter(path))
 
     def itervalues(self, iter_=None):
         """Yields all values"""
@@ -197,10 +211,7 @@ class ObjectStore(_ModelMixin, Gtk.ListStore):
         try:
             first = next(objects)
         except TypeError:
-            try:
-                first = objects[0]
-            except IndexError:
-                return
+            first = next(iter(objects))
         else:
             value = get_marshalable(first)
             yield insert_with_valuesv(-1, columns, [value])

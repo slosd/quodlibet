@@ -30,6 +30,7 @@ Of course, right now it does none of these things.
 from gi.repository import Gtk, GLib, Pango
 
 from quodlibet.util import copool
+from quodlibet.qltk.x import SmallImageToggleButton, SmallImageButton, Align
 
 SIZE = Gtk.IconSize.MENU
 
@@ -90,11 +91,15 @@ class Task(object):
         self.frac = 1.0
         self.controller.finish(self)
 
-    def __set_paused(self, value):
+    @property
+    def paused(self):
+        return self._paused
+
+    @paused.setter
+    def paused(self, value):
         if self.pausable:
             self._pause(value)
             self._paused = value
-    paused = property(lambda self: self._paused, __set_paused)
 
     def stop(self):
         if self._stop:
@@ -189,17 +194,18 @@ class TaskController(object):
             return sum(fracs) / len(self.active_tasks)
         return None
 
-    def __set_paused(self, val):
-        for t in self.active_tasks:
-            if t.pausable:
-                t.paused = val
-
-    def __get_paused(self):
+    @property
+    def paused(self):
         pausable = [t for t in self.active_tasks if t.pausable]
         if not pausable:
             return False
         return not [t for t in pausable if not t.paused]
-    paused = property(__get_paused, __set_paused)
+
+    @paused.setter
+    def paused(self, val):
+        for t in self.active_tasks:
+            if t.pausable:
+                t.paused = val
 
     def stop(self):
         [t.stop() for t in self.active_tasks if t.stoppable]
@@ -239,11 +245,11 @@ class TaskWidget(Gtk.HBox):
         self.progress = Gtk.ProgressBar()
         self.progress.set_size_request(100, -1)
         self.pack_start(self.progress, True, True, 0)
-        self.pause = Gtk.ToggleButton()
+        self.pause = SmallImageToggleButton()
         self.pause.add(Gtk.Image.new_from_stock(Gtk.STOCK_MEDIA_PAUSE, SIZE))
         self.pause.connect('toggled', self.__pause_toggled)
         self.pack_start(self.pause, False, True, 0)
-        self.stop = Gtk.Button()
+        self.stop = SmallImageButton()
         self.stop.add(Gtk.Image.new_from_stock(Gtk.STOCK_MEDIA_STOP, SIZE))
         self.stop.connect('clicked', self.__stop_clicked)
         self.pack_start(self.stop, False, True, 0)
@@ -285,7 +291,7 @@ class StatusBar(Gtk.HBox):
         self.default_label.set_text(_("No time information"))
         self.default_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.pack_start(
-            Gtk.Alignment(xalign=1.0, xscale=0, child=self.default_label),
+            Align(self.default_label, halign=Gtk.Align.END),
             True, True, 0)
         self.task_widget = TaskWidget(task_controller)
         self.pack_start(self.task_widget, True, True, 0)

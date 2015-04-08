@@ -1,4 +1,5 @@
-from tests import TestCase, mkstemp, AbstractTestCase
+# -*- coding: utf-8 -*-
+from tests import mkstemp, AbstractTestCase
 
 import os
 

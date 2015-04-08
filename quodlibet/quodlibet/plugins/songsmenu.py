@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006 Joe Wreschnig
 #      2013-2014 Nick Boultbee
 #
@@ -5,7 +6,6 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
-from gi.repository import Gtk
 from quodlibet.plugins.gui import MenuItemPlugin
 
 from quodlibet.util.songwrapper import check_wrapper_changed
@@ -55,10 +55,8 @@ class SongsMenuPlugin(MenuItemPlugin):
     plugin_album = None
     plugin_albums = None
 
-    __initialized = False
-
-    def __init__(self, songs, library, window):
-        super(SongsMenuPlugin, self).__init__(window)
+    def __init__(self, songs, library):
+        super(SongsMenuPlugin, self).__init__()
         self.__library = library
         self.__songs = songs
 

@@ -5,7 +5,6 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
-import os
 import re
 
 from gi.repository import Gtk
@@ -15,73 +14,18 @@ from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
 
-from quodlibet.qltk._editpane import EditPane, FilterCheckButton
-from quodlibet.qltk._editpane import EditingPluginHandler
+from quodlibet.plugins import PluginManager
+from quodlibet.qltk._editutils import FilterPluginBox, FilterCheckButton
+from quodlibet.qltk._editutils import EditingPluginHandler, OverwriteWarning
+from quodlibet.qltk._editutils import WriteFailedError
 from quodlibet.qltk.wlw import WritingWindow
 from quodlibet.qltk.views import TreeViewColumn
+from quodlibet.qltk.cbes import ComboBoxEntrySave
+from quodlibet.qltk.models import ObjectStore
 from quodlibet.util.path import fsdecode
+from quodlibet.util.tagsfrompath import TagsFromPattern
 from quodlibet.util.string.splitters import split_value
-
-
-class TagsFromPattern(object):
-    def __init__(self, pattern):
-        self.compile(pattern)
-
-    def compile(self, pattern):
-        self.headers = []
-        self.slashes = len(pattern) - len(pattern.replace(os.path.sep, '')) + 1
-        self.pattern = None
-        # patterns look like <tagname> non regexy stuff <tagname> ...
-        pieces = re.split(r'(<[A-Za-z0-9~_]+>)', pattern)
-        override = {'<tracknumber>': r'\d\d?', '<discnumber>': r'\d\d??'}
-        dummies_found = 0
-        for i, piece in enumerate(pieces):
-            if not piece:
-                continue
-            if piece[0] + piece[-1] == '<>':
-                piece = piece.lower()   # canonicalize to lowercase tag names
-                if "~" in piece:
-                    dummies_found += 1
-                    piece = "<QUOD_LIBET_DUMMY_%d>" % dummies_found
-                pieces[i] = '(?P%s%s)' % (piece, override.get(piece, '.+?'))
-                if "QUOD_LIBET" not in piece:
-                    self.headers.append(piece[1:-1].encode("ascii", "replace"))
-            else:
-                pieces[i] = re.escape(piece)
-
-        # some slight magic to anchor searches "nicely"
-        # nicely means if it starts with a <tag>, anchor with a /
-        # if it ends with a <tag>, anchor with .xxx$
-        # but if it's a <tagnumber>, don't bother as \d+ is sufficient
-        # and if it's not a tag, trust the user
-        if pattern.startswith('<') and not pattern.startswith('<tracknumber>')\
-                and not pattern.startswith('<discnumber>'):
-            pieces.insert(0, re.escape(os.path.sep))
-        if pattern.endswith('>') and not pattern.endswith('<tracknumber>')\
-                and not pattern.endswith('<discnumber>'):
-            pieces.append(r'(?:\.[A-Za-z0-9_+]+)$')
-
-        self.pattern = re.compile(''.join(pieces))
-
-    def match(self, song):
-        if isinstance(song, dict):
-            filename = song['~filename']
-            drive, tail = os.path.splitdrive(filename)
-            song = fsdecode(tail)
-        else:
-            song = os.path.splitdrive(song)[-1]
-
-        # only match on the last n pieces of a filename, dictated by pattern
-        # this means no pattern may effectively cross a /, despite .* doing so
-        sep = os.path.sep
-        matchon = sep + sep.join(song.split(sep)[-self.slashes:])
-        match = self.pattern.search(matchon)
-
-        # dicts for all!
-        if match is None:
-            return {}
-        else:
-            return match.groupdict()
+from quodlibet.util import connect_obj
 
 
 class UnderscoresToSpaces(FilterCheckButton):
@@ -121,16 +65,60 @@ class TagsFromPathPluginHandler(EditingPluginHandler):
     Kind = TagsFromPathPlugin
 
 
-class TagsFromPath(EditPane):
+class ListEntry(object):
+
+    def __init__(self, song):
+        self.song = song
+        self.matches = {}
+
+    def get_match(self, key):
+        return self.matches.get(key, u"")
+
+    def replace_match(self, key, value):
+        self.matches[key] = value
+
+    @property
+    def name(self):
+        return fsdecode(self.song("~basename"))
+
+
+class TagsFromPath(Gtk.VBox):
     title = _("Tags From Path")
     FILTERS = [UnderscoresToSpaces, TitleCase, SplitTag]
     handler = TagsFromPathPluginHandler()
 
-    def __init__(self, parent, library):
-        super(TagsFromPath, self).__init__(
-            const.TBP, const.TBP_EXAMPLES.split("\n"))
+    @classmethod
+    def init_plugins(cls):
+        PluginManager.instance.register_handler(cls.handler)
 
-        vbox = self.get_children()[2]
+    def __init__(self, parent, library):
+        super(TagsFromPath, self).__init__(spacing=6)
+
+        self.set_border_width(12)
+        hbox = Gtk.HBox(spacing=6)
+        cbes_defaults = const.TBP_EXAMPLES.split("\n")
+        self.combo = ComboBoxEntrySave(const.TBP, cbes_defaults,
+            title=_("Path Patterns"),
+            edit_title=_(u"Edit saved patterns…"))
+        self.combo.show_all()
+        hbox.pack_start(self.combo, True, True, 0)
+        self.preview = qltk.Button(_("_Preview"), Gtk.STOCK_CONVERT)
+        self.preview.show()
+        hbox.pack_start(self.preview, False, True, 0)
+        self.pack_start(hbox, False, True, 0)
+        self.combo.get_child().connect('changed', self._changed)
+
+        model = ObjectStore()
+        self.view = Gtk.TreeView(model=model)
+        self.view.show()
+
+        sw = Gtk.ScrolledWindow()
+        sw.set_shadow_type(Gtk.ShadowType.IN)
+        sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        sw.add(self.view)
+        self.pack_start(sw, True, True, 0)
+
+        vbox = Gtk.VBox()
         addreplace = Gtk.ComboBoxText()
         addreplace.append_text(_("Tags replace existing ones"))
         addreplace.append_text(_("Tags are added to existing ones"))
@@ -138,19 +126,47 @@ class TagsFromPath(EditPane):
         addreplace.connect('changed', self.__add_changed)
         vbox.pack_start(addreplace, True, True, 0)
         addreplace.show()
+        self.pack_start(vbox, False, True, 0)
 
-        self.preview.connect_object('clicked', self.__preview, None)
-        parent.connect_object('changed', self.__class__.__preview, self)
+        filter_box = FilterPluginBox(self.handler, self.FILTERS)
+        filter_box.connect("preview", self.__filter_preview)
+        filter_box.connect("changed", self.__filter_changed)
+        self.filter_box = filter_box
+        self.pack_start(filter_box, False, True, 0)
+
+        # Save button
+        self.save = Gtk.Button(stock=Gtk.STOCK_SAVE)
+        self.save.show()
+        bbox = Gtk.HButtonBox()
+        bbox.set_layout(Gtk.ButtonBoxStyle.END)
+        bbox.pack_start(self.save, True, True, 0)
+        self.pack_start(bbox, False, True, 0)
+
+        connect_obj(self.preview, 'clicked', self.__preview, None)
+        connect_obj(parent, 'changed', self.__class__.__preview, self)
 
         # Save changes
-        self.save.connect_object('clicked', self.__save, addreplace, library)
+        connect_obj(self.save, 'clicked', self.__save, addreplace, library)
+
+        for child in self.get_children():
+            child.show()
+
+    def __filter_preview(self, *args):
+        Gtk.Button.clicked(self.preview)
+
+    def __filter_changed(self, *args):
+        self._changed(self.combo.get_child())
+
+    def _changed(self, entry):
+        self.save.set_sensitive(False)
+        self.preview.set_sensitive(bool(entry.get_text()))
 
     def __add_changed(self, combo):
         config.set("tagsfrompath", "add", str(bool(combo.get_active())))
 
     def __preview(self, songs):
         if songs is None:
-            songs = [row[0] for row in (self.view.get_model() or [])]
+            songs = [row[0].song for row in (self.view.get_model() or [])]
 
         if songs:
             pattern_text = self.combo.get_child().get_text().decode("utf-8")
@@ -190,36 +206,47 @@ class TagsFromPath(EditPane):
             pattern = TagsFromPattern("")
 
         self.view.set_model(None)
-        model = Gtk.ListStore(
-            object, str, *([str] * len(pattern.headers)))
+        model = ObjectStore()
         for col in self.view.get_columns():
             self.view.remove_column(col)
 
-        col = TreeViewColumn(_('File'), Gtk.CellRendererText(), text=1)
+        render = Gtk.CellRendererText()
+        col = TreeViewColumn(_('File'), render)
         col.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
+
+        def cell_data_file(column, cell, model, iter_, data):
+            entry = model.get_value(iter_)
+            cell.set_property("text", entry.name)
+
+        col.set_cell_data_func(render, cell_data_file)
+
+        def cell_data_header(column, cell, model, iter_, header):
+            entry = model.get_value(iter_)
+            cell.set_property("text", entry.get_match(header))
+
         self.view.append_column(col)
         for i, header in enumerate(pattern.headers):
             render = Gtk.CellRendererText()
             render.set_property('editable', True)
-            render.connect('edited', self.__row_edited, model, i + 2)
+            render.connect('edited', self.__row_edited, model, header)
             escaped_title = header.replace("_", "__")
-            col = Gtk.TreeViewColumn(escaped_title, render, text=i + 2)
+            col = Gtk.TreeViewColumn(escaped_title, render)
             col.set_sizing(Gtk.TreeViewColumnSizing.AUTOSIZE)
+            col.set_cell_data_func(render, cell_data_header, header)
             self.view.append_column(col)
 
         for song in songs:
-            basename = fsdecode(song("~basename"))
-            row = [song, basename]
+            entry = ListEntry(song)
             match = pattern.match(song)
             for h in pattern.headers:
                 text = match.get(h, '')
-                for f in self.filters:
+                for f in self.filter_box.filters:
                     if f.active:
                         text = f.filter(h, text)
-                if not song.multiple_values:
+                if not song.can_multiple_values(h):
                     text = u", ".join(text.split("\n"))
-                row.append(text)
-            model.append(row=row)
+                entry.matches[h] = text
+            model.append([entry])
 
         # save for last to potentially save time
         if songs:
@@ -237,23 +264,23 @@ class TagsFromPath(EditPane):
 
         was_changed = set()
 
-        for row in (model or []):
-            song = row[0]
+        all_done = False
+        for entry in ((model and model.itervalues()) or []):
+            song = entry.song
             changed = False
-            if not song.valid() and not qltk.ConfirmAction(
-                self, _("Tag may not be accurate"),
-                _("<b>%s</b> changed while the program was running. "
-                  "Saving without refreshing your library may "
-                  "overwrite other changes to the song.\n\n"
-                  "Save this song anyway?") % (
-                util.escape(fsdecode(song("~basename"))))
-                ).run():
-                break
+            if not song.valid():
+                win.hide()
+                dialog = OverwriteWarning(self, song)
+                resp = dialog.run()
+                win.show()
+                if resp != OverwriteWarning.RESPONSE_SAVE:
+                    break
 
             for i, h in enumerate(pattern.headers):
-                if row[i + 2]:
-                    text = row[i + 2].decode("utf-8")
-                    if not add or h not in song or not song.multiple_values:
+                text = entry.get_match(h)
+                if text:
+                    can_multiple = song.can_multiple_values(h)
+                    if not add or h not in song or not can_multiple:
                         song[h] = text
                         changed = True
                     else:
@@ -266,26 +293,25 @@ class TagsFromPath(EditPane):
                 try:
                     song.write()
                 except:
-                    qltk.ErrorMessage(
-                        self, _("Unable to edit song"),
-                        _("Saving <b>%s</b> failed. The file "
-                          "may be read-only, corrupted, or you "
-                          "do not have permission to edit it.") % (
-                        util.escape(fsdecode(song('~basename'))))
-                        ).run()
+                    util.print_exc()
+                    WriteFailedError(self, song).run()
                     library.reload(song, changed=was_changed)
                     break
                 was_changed.add(song)
 
             if win.step():
                 break
+        else:
+            all_done = True
 
         win.destroy()
         library.changed(was_changed)
-        self.save.set_sensitive(False)
+        self.save.set_sensitive(not all_done)
 
-    def __row_edited(self, renderer, path, new, model, colnum):
-        row = model[path]
-        if row[colnum] != new:
-            row[colnum] = new
+    def __row_edited(self, renderer, path, new, model, header):
+        entry = model[path][0]
+        new = new.decode("utf-8")
+        if entry.get_match(header) != new:
+            entry.replace_match(header, new)
             self.preview.set_sensitive(True)
+            self.save.set_sensitive(True)

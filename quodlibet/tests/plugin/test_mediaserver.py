@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -6,21 +7,25 @@
 
 from gi.repository import Gtk
 
-import dbus
+try:
+    import dbus
+except ImportError:
+    dbus = None
 
-from tests.plugin import PluginTestCase
+from tests import skipUnless
+from tests.plugin import PluginTestCase, init_fake_app, destroy_fake_app
 
-from quodlibet import library
-from quodlibet import app
+from quodlibet import config
 
 
+@skipUnless(dbus, "no python-dbus")
 class TMediaServer(PluginTestCase):
-    @classmethod
-    def setUpClass(cls):
-        app.library = library.init()
-        cls.plugin = cls.plugins["mediaserver"].cls
 
     def setUp(self):
+        config.init()
+        init_fake_app()
+
+        self.plugin = self.plugins["mediaserver"].cls
         self.m = self.plugin()
         self.m.enabled()
         self._replies = []
@@ -28,6 +33,18 @@ class TMediaServer(PluginTestCase):
             "reply_handler": self._reply,
             "error_handler": self._error
         }
+
+    def tearDown(self):
+        bus = dbus.SessionBus()
+        self.failUnless(
+            bus.name_has_owner("org.gnome.UPnP.MediaServer2.QuodLibet"))
+        self.m.disabled()
+        self.failIf(
+            bus.name_has_owner("org.gnome.UPnP.MediaServer2.QuodLibet"))
+        del self.m
+
+        destroy_fake_app()
+        config.quit()
 
     def _reply(self, *args):
         self._replies.append(args)
@@ -56,12 +73,3 @@ class TMediaServer(PluginTestCase):
         bus = dbus.SessionBus()
         self.failUnless(
             bus.name_has_owner("org.gnome.UPnP.MediaServer2.QuodLibet"))
-
-    def tearDown(self):
-        bus = dbus.SessionBus()
-        self.failUnless(
-            bus.name_has_owner("org.gnome.UPnP.MediaServer2.QuodLibet"))
-        self.m.disabled()
-        self.failIf(
-            bus.name_has_owner("org.gnome.UPnP.MediaServer2.QuodLibet"))
-        del self.m

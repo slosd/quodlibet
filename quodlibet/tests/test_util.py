@@ -1,18 +1,22 @@
+# -*- coding: utf-8 -*-
 import uuid
 from quodlibet.config import HardCodedRatingsPrefs
 from quodlibet.util.path import *
+from quodlibet.util import re_escape
 from quodlibet.util.string import decode, encode, split_escape, join_escape
 from quodlibet.util.string.splitters import *
 from quodlibet.util.library import *
 from tests import TestCase, mkstemp, skipIf
 
 import tempfile
-import sys
 import os
-import re
+import sys
+import threading
+import time
 from quodlibet import util
 from quodlibet import config
 from quodlibet.util import format_time_long as f_t_l
+from quodlibet.util.compat import text_type
 
 
 is_win = os.name == "nt"
@@ -41,24 +45,6 @@ class Tgetcwd(TestCase):
 
     def test_Tgetcwd(self):
         self.assertTrue(is_fsnative(getcwd()))
-
-
-class Tiscommand(TestCase):
-
-    def test_unix(self):
-        if is_win:
-            return
-
-        self.failUnless(iscommand("ls"))
-        self.failUnless(iscommand("/bin/ls"))
-        self.failUnless(iscommand("pidof"))
-
-    def test_both(self):
-        self.failIf(iscommand("zzzzzzzzz"))
-        self.failIf(iscommand("/bin/zzzzzzzzz"))
-        self.failIf(iscommand(""))
-        self.failIf(iscommand("/bin"))
-        self.failIf(iscommand("X11"))
 
 
 class Tmtime(TestCase):
@@ -148,8 +134,8 @@ class Tformat_rating(TestCase):
         self.failUnlessEqual(util.format_rating(-0.5), "00000")
 
 
-class Tescape(TestCase):
-    def test_empty(self):
+class Tpango(TestCase):
+    def test_escape_empty(self):
         self.failUnlessEqual(util.escape(""), "")
 
     def test_roundtrip(self):
@@ -158,25 +144,33 @@ class Tescape(TestCase):
             self.failIfEqual(s, esc)
             self.failUnlessEqual(s, util.unescape(esc))
 
-
-class Tunescape(Tescape):
-    def test_empty(self):
+    def test_unescape_empty(self):
         self.failUnlessEqual(util.unescape(""), "")
+
+    def test_format(self):
+        self.assertEqual(util.bold("foo"), "<b>foo</b>")
+        self.assertEqual(util.italic("foo"), "<i>foo</i>")
+        self.assertEqual(util.monospace("foo"), "<tt>foo</tt>")
 
 
 class Tre_esc(TestCase):
     def test_empty(self):
-        self.failUnlessEqual(re.escape(""), "")
+        self.failUnlessEqual(re_escape(""), "")
+        self.assertTrue(isinstance(re_escape(""), bytes))
+
+    def test_empty_unicode(self):
+        self.failUnlessEqual(re_escape(u""), u"")
+        self.assertTrue(isinstance(re_escape(u""), unicode))
 
     def test_safe(self):
-        self.failUnlessEqual(re.escape("fo o"), "fo o")
+        self.failUnlessEqual(re_escape("fo o"), "fo o")
 
     def test_unsafe(self):
-        self.failUnlessEqual(re.escape("!bar"), r"\!bar")
+        self.failUnlessEqual(re_escape("!bar"), r"\!bar")
 
     def test_many_unsafe(self):
         self.failUnlessEqual(
-            re.escape("*quux#argh?woo"), r"\*quux\#argh\?woo")
+            re_escape("*quux#argh?woo"), r"\*quux\#argh\?woo")
 
 
 class Tdecode(TestCase):
@@ -211,33 +205,6 @@ class Tcapitalize(TestCase):
 
     def test_nonalphabet(self):
         self.failUnlessEqual(util.capitalize("!aa B"), "!aa B")
-
-
-class Tsplit_value(TestCase):
-    def test_single(self):
-        self.failUnlessEqual(split_value("a b"), ["a b"])
-
-    def test_double(self):
-        self.failUnlessEqual(split_value("a, b"), ["a", "b"])
-
-    def test_custom_splitter(self):
-        self.failUnlessEqual(split_value("a b", [" "]), ["a", "b"])
-
-    def test_two_splitters(self):
-        self.failUnlessEqual(
-            split_value("a, b and c", [",", "and"]), ["a", "b and c"])
-
-    def test_no_splitters(self):
-        self.failUnlessEqual(split_value("a b", []), ["a b"])
-
-    def test_wordboundry(self):
-        self.failUnlessEqual(
-            split_value("Andromeda and the Band", ["and"]),
-            ["Andromeda", "the Band"])
-
-    def test_unicode_wordboundry(self):
-        val = '\xe3\x81\x82&\xe3\x81\x84'.decode('utf-8')
-        self.failUnlessEqual(split_value(val), val.split("&"))
 
 
 class Thuman_sort(TestCase):
@@ -304,6 +271,47 @@ class Tparse_time(TestCase):
 
     def test_negative(self):
         self.failUnlessEqual(util.parse_time("-2:04"), -124)
+
+
+class Tparse_date(TestCase):
+
+    def test_invalid(self):
+        self.assertRaises(ValueError, util.parse_date, "not a date")
+        self.assertRaises(ValueError, util.parse_date, "0")
+        self.assertRaises(ValueError, util.parse_date, "2000-13")
+        self.assertRaises(ValueError, util.parse_date, "2000-01-32")
+        self.assertRaises(ValueError, util.parse_date, "2000-01-0")
+        self.assertRaises(ValueError, util.parse_date, "2000-0-01")
+
+    def test_valid(self):
+        ref = time.mktime(time.strptime("2004", "%Y"))
+        self.assertEqual(util.parse_date("2004"), ref)
+        self.assertEqual(util.parse_date("2004-01-01"), ref)
+        self.assertEqual(util.parse_date("2004-1-1"), ref)
+        self.assertTrue(
+            util.parse_date("2004-01-01") < util.parse_date("2004-01-02"))
+
+
+class Tdate_key(TestCase):
+
+    def test_compare(self):
+        date_key = util.date_key
+        self.assertTrue(date_key("2004") == date_key("2004-01-01"))
+        self.assertTrue(date_key("2004") == date_key("2004-01"))
+        self.assertTrue(date_key("2004") < date_key("2004-01-02"))
+        self.assertTrue(date_key("2099-02-02") < date_key("2099-03-30"))
+
+        self.assertTrue(date_key("2004-01-foo") == date_key("2004-01"))
+
+    def test_validate(self):
+        validate = util.validate_query_date
+
+        for valid in ["2004", "2005-01", "3000-3-4"]:
+            self.assertTrue(validate(valid))
+
+        for invalid in ["", "-", "3000-", "9-0", "8-1-0", "1-13-1", "1-1-32",
+                        "1-1-1-1-1", "a", "1-a", "1-1-a"]:
+            self.assertFalse(validate(invalid))
 
 
 class Tformat_size(TestCase):
@@ -621,23 +629,30 @@ class Txdg_dirs(TestCase):
         should = os.path.join(os.path.expanduser("~"), ".local", "share")
         self.failUnlessEqual(xdg_get_data_home(), should)
 
+    def test_get_user_dirs(self):
+        xdg_get_user_dirs()
+
+    def test_parse_xdg_user_dirs(self):
+        data = '# foo\nBLA="$HOME/blah"\n'
+        vars_ = parse_xdg_user_dirs(data)
+        self.assertTrue("BLA" in vars_)
+        expected = os.path.join(os.environ.get("HOME", ""), "blah")
+        self.assertEqual(vars_["BLA"], expected)
+
+        vars_ = parse_xdg_user_dirs('BLA="$HOME/"')
+        self.assertTrue("BLA" in vars_)
+        self.assertEqual(vars_["BLA"], os.environ.get("HOME", ""))
+
+        # some invalid
+        self.assertFalse(parse_xdg_user_dirs("foo"))
+        self.assertFalse(parse_xdg_user_dirs("foo=foo bar"))
+        self.assertFalse(parse_xdg_user_dirs("foo='foo"))
+
     def test_on_windows(self):
         self.assertTrue(xdg_get_system_data_dirs())
         self.assertTrue(xdg_get_cache_home())
         self.assertTrue(xdg_get_data_home())
-
-
-class Tpathname2url(TestCase):
-    def test_win(self):
-        cases = {
-            r"c:\abc\def": "/c:/abc/def",
-            r"C:\a b\c.txt": "/C:/a%20b/c.txt",
-            r"\\xy\z.txt": "xy/z.txt",
-            r"C:\a:b\c:d": "/C:/a%3Ab/c%3Ad"
-            }
-        p2u = pathname2url_win32
-        for inp, should in cases.iteritems():
-            self.failUnlessEqual(p2u(inp), should)
+        self.assertTrue(xdg_get_config_home())
 
 
 class Tlibrary(TestCase):
@@ -650,38 +665,14 @@ class Tlibrary(TestCase):
     def test_basic(self):
         self.failIf(get_scan_dirs())
         if os.name == "nt":
-            set_scan_dirs(["C:\\foo", "D:\\bar", ""])
-            self.failUnlessEqual(get_scan_dirs(), ["C:\\foo", "D:\\bar"])
+            set_scan_dirs([u"C:\\foo", u"D:\\bar", ""])
+            self.failUnlessEqual(get_scan_dirs(), [u"C:\\foo", u"D:\\bar"])
         else:
             set_scan_dirs(["foo", "bar", ""])
             self.failUnlessEqual(get_scan_dirs(), ["foo", "bar"])
 
 
 class TNormalizePath(TestCase):
-    def test_darwin(self):
-        if is_win:
-            return
-
-        from quodlibet.util.path import _normalize_darwin_path
-
-        def norm(p):
-            return _normalize_darwin_path(p, strict=True)
-
-        name = tempfile.mkdtemp()
-        basename = os.path.basename(name)
-        old_cwd = os.getcwd()
-        os.chdir(name)
-        try:
-            self.failUnlessEqual(norm(name), name)
-            self.failUnlessEqual(norm("."), ".")
-            self.failUnlessEqual(norm(".."), "..")
-            t = os.path.join("..", basename)
-            self.failUnlessEqual(norm(t), t)
-            t = os.path.join("/", "bin", "..", norm(name))
-            self.failUnlessEqual(norm(t), t)
-        finally:
-            os.chdir(old_cwd)
-            os.rmdir(name)
 
     def test_default(self):
         from quodlibet.util.path import _normalize_path as norm
@@ -694,8 +685,12 @@ class TNormalizePath(TestCase):
             os.rmdir(name)
 
     def test_canonicalise(self):
-        from quodlibet.util.path import _normalize_path as norm
+        from quodlibet.util.path import _normalize_path, _normalize_darwin_path
+        self._test_canonicalise(_normalize_path)
+        if sys.platform == "darwin":
+            self._test_canonicalise(_normalize_darwin_path)
 
+    def _test_canonicalise(self, norm):
         f, path = tempfile.mkstemp()
         os.close(f)
         path = norm(path)
@@ -767,9 +762,60 @@ class Tload_library(TestCase):
         self.assertTrue(lib2 is not lib3)
 
     def test_glib(self):
-        lib, name = util.load_library(["libglib-2.0.so.0"])
-        self.assertEqual(name, "libglib-2.0.so.0")
+        if sys.platform == "darwin":
+            fn = "libglib-2.0.0.dylib"
+        else:
+            fn = "libglib-2.0.so.0"
+        lib, name = util.load_library([fn])
+        self.assertEqual(name, fn)
         self.assertTrue(lib)
+
+
+class Tstrip_win32_incompat_from_path(TestCase):
+
+    def test_types(self):
+        v = strip_win32_incompat_from_path("")
+        self.assertTrue(isinstance(v, bytes))
+        v = strip_win32_incompat_from_path("foo")
+        self.assertTrue(isinstance(v, bytes))
+
+        v = strip_win32_incompat_from_path(u"")
+        self.assertTrue(isinstance(v, unicode))
+        v = strip_win32_incompat_from_path(u"foo")
+        self.assertTrue(isinstance(v, unicode))
+
+    def test_basic(self):
+        if is_win:
+            v = strip_win32_incompat_from_path(u"C:\\foo\\<>/a")
+            self.assertEqual(v, u"C:\\foo\\___a")
+        else:
+            v = strip_win32_incompat_from_path("/foo/<>a")
+            self.assertEqual(v, "/foo/__a")
+
+
+class TPathHandling(TestCase):
+
+    def test_main(self):
+        v = fsnative(u"foo")
+        self.assertTrue(is_fsnative(v))
+
+        v2 = glib2fsnative(fsnative2glib(v))
+        self.assertTrue(is_fsnative(v2))
+        self.assertEqual(v, v2)
+
+        v3 = bytes2fsnative(fsnative2bytes(v))
+        self.assertTrue(is_fsnative(v3))
+        self.assertEqual(v, v3)
+
+
+class Tget_temp_cover_file(TestCase):
+
+    def test_main(self):
+        fobj = get_temp_cover_file(b"foobar")
+        try:
+            self.assertTrue(is_fsnative(fobj.name))
+        finally:
+            fobj.close()
 
 
 class Tsplit_escape(TestCase):
@@ -828,3 +874,192 @@ class Tsplit_escape(TestCase):
         values = ["\\:", ":"]
         joined = join_escape(values, ":")
         self.assertEqual(split_escape(joined, ":"), values)
+
+
+class TMainRunner(TestCase):
+
+    def test_abort_before_call(self):
+        runner = util.MainRunner()
+
+        def worker():
+            self.assertRaises(
+                util.MainRunnerAbortedError, runner.call, lambda: None)
+
+        thread = threading.Thread(target=worker)
+        runner.abort()
+        thread.start()
+        thread.join()
+
+    def test_timeout(self):
+        runner = util.MainRunner()
+
+        def worker():
+            self.assertRaises(
+                util.MainRunnerTimeoutError, runner.call, lambda: None,
+                timeout=0.00001)
+
+        for i in range(3):
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join()
+        runner.abort()
+
+    def test_call_exception(self):
+        from gi.repository import GLib
+
+        runner = util.MainRunner()
+        loop = GLib.MainLoop()
+
+        def func():
+            raise KeyError
+
+        def worker():
+            try:
+                self.assertRaises(util.MainRunnerError, runner.call, func)
+            finally:
+                loop.quit()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        loop.run()
+        runner.abort()
+        thread.join()
+
+    def test_from_main_loop(self):
+        from gi.repository import GLib
+
+        runner = util.MainRunner()
+        loop = GLib.MainLoop()
+
+        def in_main_loop():
+            try:
+                self.assertRaises(
+                    util.MainRunnerError, runner.call, lambda: None, foo=0)
+                self.assertEqual(
+                    runner.call(lambda i: i + 1, 42, priority=0), 43)
+                self.assertEqual(runner.call(lambda i: i - 1, 42), 41)
+            finally:
+                loop.quit()
+
+        GLib.idle_add(in_main_loop)
+        loop.run()
+
+    def test_ok(self):
+        from gi.repository import GLib
+
+        runner = util.MainRunner()
+        loop = GLib.MainLoop()
+
+        def func(i):
+            self.assertTrue(util.is_main_thread())
+            return i + 1
+
+        def worker():
+            try:
+                self.assertEqual(runner.call(func, 42), 43)
+            finally:
+                loop.quit()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+
+        loop.run()
+        thread.join()
+        runner.abort()
+
+    def test_multi_abort(self):
+        runner = util.MainRunner()
+        runner.abort()
+        runner.abort()
+
+        def worker():
+            self.assertRaises(util.MainRunnerError, runner.call, lambda: None)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+
+
+class Tconnect_destroy(TestCase):
+
+    def test_main(self):
+        from gi.repository import Gtk
+
+        b = Gtk.Button()
+
+        class A(Gtk.Button):
+
+            def foo(self):
+                pass
+
+        a = A()
+        ref = sys.getrefcount(a)
+        util.connect_destroy(b, "clicked", a.foo)
+        self.assertEqual(sys.getrefcount(a), ref + 1)
+        a.destroy()
+        self.assertEqual(sys.getrefcount(a), ref)
+
+
+class Tcached_property(TestCase):
+
+    def test_main(self):
+
+        class A(object):
+            @util.cached_property
+            def foo(self):
+                return object()
+
+        a = A()
+        first = a.foo
+        self.assertTrue(first is a.foo)
+        del a.__dict__["foo"]
+        self.assertFalse(first is a.foo)
+
+    def test_dunder(self):
+
+        def define_class():
+
+            class A(object):
+                @util.cached_property
+                def __foo_(self):
+                    return object()
+
+        self.assertRaises(AssertionError, define_class)
+
+
+class Tenum(TestCase):
+
+    def test_main(self):
+
+        @util.enum
+        class Foo(object):
+            FOO = 0
+            BAR = 1
+
+        self.assertTrue(issubclass(Foo, int))
+        self.assertTrue(isinstance(Foo.BAR, Foo))
+        self.assertTrue(isinstance(Foo.FOO, Foo))
+        self.assertEqual(Foo.FOO, 0)
+        self.assertEqual(Foo.BAR, 1)
+
+
+class Tlist_unique(TestCase):
+
+    def test_main(self):
+        self.assertEqual(util.list_unique([]), [])
+        self.assertEqual(util.list_unique(iter([])), [])
+        self.assertEqual(util.list_unique([1, 2, 3]), [1, 2, 3])
+        self.assertEqual(util.list_unique([1, 2, 1, 4]), [1, 2, 4])
+        self.assertEqual(util.list_unique([1, 1, 1, 2]), [1, 2])
+
+
+class Tset_win32_unicode_argv(TestCase):
+
+    def test_main(self):
+        old_argv = sys.argv
+        try:
+            util.set_win32_unicode_argv()
+            if os.name == "nt":
+                self.assertTrue(isinstance(sys.argv[0], text_type))
+        finally:
+            sys.argv = old_argv

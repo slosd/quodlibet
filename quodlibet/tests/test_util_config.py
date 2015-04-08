@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 from tests import TestCase, mkstemp
+from helper import temp_filename
 
 from quodlibet.util.config import Config, Error
 
@@ -122,3 +123,87 @@ class TConfig(TestCase):
         conf.add_section("foo")
         conf.set("foo", "bar", "\xff\xff\xff\xff\xff\xff")
         self.assertRaises(Error, conf.getstringlist, "foo", "bar")
+
+    def test_getlist(self):
+        conf = Config()
+        conf.add_section("foo")
+        self.assertEqual(conf.getlist("foo", "bar", ["arg"]), ["arg"])
+        conf.set("foo", "bar", "abc,fo:o\\,bar")
+        self.assertEqual(conf.getlist("foo", "bar"), ["abc", "fo:o,bar"])
+        self.assertEqual(conf.getlist("foo", "bar", sep=":"),
+                         ["abc,fo", "o\\,bar"])
+
+        conf.set("foo", "bar", "")
+        self.assertEqual(conf.getlist("foo", "bar"), [""])
+
+    def test_setlist(self):
+        conf = Config()
+        conf.add_section("foo")
+        conf.setlist("foo", "bar", [" a", ",", "c"])
+        self.assertEqual(conf.getlist("foo", "bar"), [" a", ",", "c"])
+        self.assertEqual(conf.get("foo", "bar"), " a,\\,,c")
+        conf.setlist("foo", "bar", [" a", ",", "c"], sep=":")
+        self.assertEqual(conf.get("foo", "bar"), " a:,:c")
+
+    def test_versioning_disabled(self):
+        # we don't pass a version, so versioning is disabled
+        conf = Config()
+        self.assertRaises(Error, conf.get_version)
+        with temp_filename() as filename:
+            conf.read(filename)
+        self.assertRaises(Error, conf.register_upgrade_function, lambda: None)
+
+    def test_versioning_upgrade_func(self):
+        called = []
+
+        with temp_filename() as filename:
+            conf = Config(version=0)
+
+            def func(*args):
+                called.append(args)
+
+            conf.register_upgrade_function(func)
+            self.assertRaises(Error, conf.get_version)
+            conf.read(filename)
+            self.assertEqual(conf.get_version(), -1)
+            conf.register_upgrade_function(func)
+
+        self.assertEqual([(conf, -1, 0), (conf, -1, 0)], called)
+
+    def test_versioning(self):
+        with temp_filename() as filename:
+            conf = Config(version=41)
+            conf.add_section("foo")
+            conf.set("foo", "bar", "quux")
+            conf.write(filename)
+            self.assertRaises(Error, conf.get_version)
+
+            # old was 41, we have 42, so upgrade
+            def func(config, old, new):
+                if old < 42:
+                    config.set("foo", "bar", "nope")
+            conf = Config(version=42)
+            conf.register_upgrade_function(func)
+            conf.read(filename)
+            self.assertEqual(conf.get_version(), 41)
+            self.assertEqual(conf.get("foo", "bar"), "nope")
+
+            # write doesn't change version
+            conf.write(filename)
+            self.assertEqual(conf.get_version(), 41)
+
+            # but if we load again, it does
+            conf.read(filename)
+            self.assertEqual(conf.get_version(), 42)
+
+    def test_upgrade_first_read(self):
+        # don't run upgrade funcs if there is no config file yet
+        with temp_filename() as filename:
+            pass
+
+        conf = Config(version=41)
+
+        def func(*args):
+            self.assertTrue(False)
+        conf.register_upgrade_function(func)
+        conf.read(filename)

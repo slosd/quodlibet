@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2010 Steven Robertson
 #           2012 Christoph Reiter
 #
@@ -88,9 +89,8 @@ def get_config():
 class Equalizer(EventPlugin):
     PLUGIN_ID = "Equalizer"
     PLUGIN_NAME = _("Equalizer")
-    PLUGIN_DESC = _("Control the balance of your music with an equalizer.")
+    PLUGIN_DESC = _("Controls the tone of your music with an equalizer.")
     PLUGIN_ICON = 'gtk-connect'
-    PLUGIN_VERSION = '2.3'
 
     @property
     def player_has_eq(self):
@@ -120,12 +120,17 @@ class Equalizer(EventPlugin):
         vb = Gtk.VBox(spacing=6)
         if not self.player_has_eq:
             l = Gtk.Label()
-            l.set_markup('The current backend does not support equalization.')
+            l.set_markup(
+                _('The current backend does not support equalization.'))
             vb.pack_start(l, False, True, 0)
             return vb
 
-        bands = [(band >= 1000 and ('%.1f kHz' % (band / 1000.))
-                  or ('%d Hz' % band)) for band in app.player.eq_bands]
+        def format_hertz(band):
+            if band >= 1000:
+                return _('%.1f kHz') % (band / 1000.)
+            return _('%d Hz') % band
+
+        bands = [format_hertz(band) for band in app.player.eq_bands]
         levels = get_config() + [0.] * len(bands)
 
         table = Gtk.Table(rows=len(bands), columns=3)
@@ -154,7 +159,7 @@ class Equalizer(EventPlugin):
             hs = Gtk.HScale(adjustment=adj)
             hs.set_draw_value(True)
             hs.set_value_pos(Gtk.PositionType.RIGHT)
-            hs.connect('format-value', lambda s, v: '%.1f dB' % v)
+            hs.connect('format-value', lambda s, v: _('%.1f dB') % v)
             table.attach(hs, 2, 3, i, i + 1)
         vb.pack_start(table, True, True, 0)
 

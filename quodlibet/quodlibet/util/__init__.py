@@ -15,6 +15,7 @@ import sys
 import traceback
 import urlparse
 import unicodedata
+import threading
 import subprocess
 import webbrowser
 import contextlib
@@ -26,12 +27,10 @@ try:
 except ImportError:
     fcntl = None
 
-from quodlibet.util.path import (fsdecode, fsencode, iscommand, fsnative,
-    expanduser, pathname2url, strip_win32_incompat, is_fsnative)
-from quodlibet.util.string.splitters import split_value
-from quodlibet.util.titlecase import title
+from quodlibet.util.path import iscommand, is_fsnative
+from quodlibet.util.string.titlecase import title
 
-from quodlibet.const import FSCODING as fscoding, SUPPORT_EMAIL, COPYRIGHT
+from quodlibet.const import SUPPORT_EMAIL, COPYRIGHT
 from quodlibet.util.dprint import print_d, print_
 
 
@@ -106,8 +105,11 @@ class OptionParser(object):
         for k in self.__help.keys():
             l = max(l, len(k) + len(self.__args.get(k, "")) + 4)
 
-        s = _("Usage: %s %s\n") % (
-            sys.argv[0], self.__usage if self.__usage else _("[options]"))
+        s = _("Usage: %(program)s %(usage)s") % {
+            "program": sys.argv[0],
+            "usage": self.__usage if self.__usage else _("[options]"),
+        }
+        s += "\n"
         if self.__description:
             s += "%s - %s\n" % (self.__name, self.__description)
         s += "\n"
@@ -196,6 +198,18 @@ def unescape(str):
     return str.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
+def bold(string):
+    return "<b>%s</b>" % string
+
+
+def monospace(string):
+    return "<tt>%s</tt>" % string
+
+
+def italic(string):
+    return "<i>%s</i>" % string
+
+
 def parse_time(timestr, err=(ValueError, re.error)):
     """Parse a time string in hh:mm:ss, mm:ss, or ss format."""
     if timestr[0:1] == "-":
@@ -208,6 +222,81 @@ def parse_time(timestr, err=(ValueError, re.error)):
                           re.split(r":|\.", timestr), 0)
     except err:
         return 0
+
+
+def validate_query_date(datestr):
+    """Validates a user provided date that can be compared using date_key().
+
+    Returns True id the date is valid.
+    """
+
+    parts = datestr.split("-")
+    if len(parts) > 3:
+        return False
+
+    if len(parts) > 2:
+        try:
+            v = int(parts[2])
+        except ValueError:
+            return False
+        else:
+            if not 1 <= v <= 31:
+                return False
+
+    if len(parts) > 1:
+        try:
+            v = int(parts[1])
+        except ValueError:
+            return False
+        else:
+            if not 1 <= v <= 12:
+                return False
+
+    try:
+        int(parts[0])
+    except ValueError:
+        return False
+
+    return True
+
+
+def date_key(datestr):
+    """Parse a date format y-m-d and returns an undefined integer that
+    can only be used to compare dates.
+
+    In case the date string is invalid the returned value is undefined.
+    """
+
+    # this basically does "2001-02-03" -> 20010203
+
+    default = [0, 1, 1]
+    parts = datestr.split("-")
+    parts += default[len(parts):]
+
+    value = 0
+    for d, p, m in zip(default, parts, (10000, 100, 1)):
+        try:
+            value += int(p) * m
+        except ValueError:
+            # so that "2003-01-" is equal to "2003-01" ..
+            value += d * m
+    return value
+
+
+def parse_date(datestr):
+    """Parses yyyy-mm-dd date format and returns unix time.
+
+    Raises ValueError in case the input couldn't be parsed.
+    """
+
+    import time
+
+    try:
+        frmt = ["%Y", "%Y-%m", "%Y-%m-%d"][datestr.count("-")]
+    except IndexError:
+        raise ValueError
+
+    return time.mktime(time.strptime(datestr, frmt))
 
 
 def format_rating(value, blank=True):
@@ -244,6 +333,7 @@ def format_size(size):
 
 def format_time(time):
     """Turn a time value in seconds into hh:mm:ss or mm:ss."""
+
     if time < 0:
         time = abs(time)
         prefix = "-"
@@ -258,6 +348,12 @@ def format_time(time):
         return "%s%d:%02d" % (prefix, time // 60, time % 60)
 
 
+def format_time_display(time):
+    """Like format_time, but will use RATIO instead of a colon to separate"""
+
+    return format_time(time).replace(":", u"\u2236")
+
+
 def format_time_long(time, limit=2):
     """Turn a time value in seconds into x hours, x minutes, etc.
 
@@ -269,15 +365,15 @@ def format_time_long(time, limit=2):
         return _("No time information")
 
     cutoffs = [
-        (60, "%d seconds", "%d second"),
-        (60, "%d minutes", "%d minute"),
-        (24, "%d hours", "%d hour"),
-        (365, "%d days", "%d day"),
-        (None, "%d years", "%d year"),
+        (60, lambda n: ngettext("%d second", "%d seconds", n)),
+        (60, lambda n: ngettext("%d minute", "%d minutes", n)),
+        (24, lambda n: ngettext("%d hour", "%d hours", n)),
+        (365, lambda n: ngettext("%d day", "%d days", n)),
+        (None, lambda n: ngettext("%d year", "%d years", n)),
     ]
 
     time_str = []
-    for divisor, plural, single in cutoffs:
+    for divisor, gettext_partial in cutoffs:
         if time < 1:
             break
         if divisor is None:
@@ -285,7 +381,7 @@ def format_time_long(time, limit=2):
         else:
             time, unit = divmod(time, divisor)
         if unit:
-            time_str.append(ngettext(single, plural, unit) % unit)
+            time_str.append(gettext_partial(unit) % unit)
     time_str.reverse()
 
     if limit:
@@ -325,7 +421,7 @@ def human_sort_key(s, normalize=unicodedata.normalize):
 def website(site):
     """Open the given URL in the user's default browser"""
 
-    if os.name == "nt":
+    if os.name == "nt" or sys.platform == "darwin":
         return webbrowser.open(site)
 
     # all commands here return immediately
@@ -378,8 +474,8 @@ def tag(name, cap=True):
             # Translators: If tag names, when capitalized, should not
             # be title-cased ("Looks Like This"), but rather only have
             # the first letter capitalized, translate this string as
-            # something other than "check|titlecase?".
-            if _("check|titlecase?") == "check|titlecase?":
+            # something other than "titlecase?".
+            if C_("check", "titlecase?") == "titlecase?":
                 parts = map(title, parts)
             else:
                 parts = map(capitalize, parts)
@@ -408,7 +504,7 @@ def tagsplit(tag):
 def pattern(pat, cap=True, esc=False):
     """Return a 'natural' version of the pattern string for human-readable
     bits. Assumes all tags in the pattern are present."""
-    from quodlibet.parse import Pattern, XMLFromPattern
+    from quodlibet.pattern import Pattern, XMLFromPattern
 
     class Fakesong(dict):
         cap = False
@@ -485,6 +581,8 @@ class DeferredSignal(object):
     When the target function will finally be called the arguments passed
     are the last arguments passed to DeferredSignal.
 
+    `priority` defaults to GLib.PRIORITY_DEFAULT
+
     If `owner` is given, it will not call the target after the owner is
     destroyed.
 
@@ -495,7 +593,7 @@ class DeferredSignal(object):
     widget.connect('signal', DeferredSignal(func, owner=widget), user_arg)
     """
 
-    def __init__(self, func, timeout=None, owner=None):
+    def __init__(self, func, timeout=None, owner=None, priority=None):
         """timeout in milliseconds"""
 
         self.func = func
@@ -508,10 +606,27 @@ class DeferredSignal(object):
             owner.connect("destroy", destroy_cb)
 
         from gi.repository import GLib
+
+        if priority is None:
+            priority = GLib.PRIORITY_DEFAULT
+
         if timeout is None:
-            self.do_idle_add = GLib.idle_add
+            self.do_idle_add = lambda f: GLib.idle_add(f, priority=priority)
         else:
-            self.do_idle_add = lambda f: GLib.timeout_add(timeout, f)
+            self.do_idle_add = lambda f: GLib.timeout_add(
+                timeout, f, priority=priority)
+
+    @property
+    def im_self(self):
+        return self.func.im_self
+
+    @property
+    def __code__(self):
+        return self.func.__code__
+
+    @property
+    def __closure__(self):
+        return self.func.__closure__
 
     def abort(self):
         """Abort any queued up calls.
@@ -538,31 +653,74 @@ class DeferredSignal(object):
         return False
 
 
-def gobject_weak(fun, *args, **kwargs):
-    """Connect to a signal and disconnect if destroy gets emitted.
-    If parent is given, it connects to its destroy signal
-    Example:
-        gobject_weak(gobject_1.connect, 'changed', self.__changed)
-        gobject_weak(gobject_1.connect, 'changed', self.__changed,
-            parent=gobject_2)
+def connect_obj(this, detailed_signal, handler, that, *args, **kwargs):
+    """A wrapper for connect() that has the same interface as connect_object().
+    Used as a temp solution to get rid of connect_object() calls which may
+    be changed to match the C version more closely in the future.
+
+    https://git.gnome.org/browse/pygobject/commit/?id=86fb12b3e9b75
+
+    While it's not clear if switching to weak references will break anything,
+    we mainly used this for adjusting the callback signature. So using
+    connect() behind the scenes will keep things working as they are now.
     """
-    parent = kwargs.pop("parent", None)
-    obj = fun.__self__
-    sig = fun(*args)
-    disconnect = lambda obj, handle: obj.disconnect(handle)
-    if parent:
-        parent.connect_object('destroy', disconnect, obj, sig)
+
+    def wrap(this, *args):
+        return handler(that, *args)
+
+    return this.connect(detailed_signal, wrap, *args, **kwargs)
+
+
+def _connect_destroy(sender, func, detailed_signal, handler, *args, **kwargs):
+    """Connect a bound method to a foreign object signal and disconnect
+    if the object the method is bound to emits destroy (Gtk.Widget subclass).
+
+    Also works if the handler is a nested function in a method and
+    references the method's bound object.
+
+    This solves the problem that the sender holds a strong reference
+    to the bound method and the bound to object doesn't get GCed.
+    """
+
+    if hasattr(handler, "im_self"):
+        obj = handler.im_self
     else:
-        obj.connect('destroy', disconnect, sig)
-    return sig
+        # XXX: get the "self" var of the enclosing scope.
+        # Used for nested functions which ref the object but aren't methods.
+        # In case they don't ref "self" normal connect() should be used anyway.
+        index = handler.__code__.co_freevars.index("self")
+        obj = handler.__closure__[index].cell_contents
+
+    assert obj is not sender
+
+    handler_id = func(detailed_signal, handler, *args, **kwargs)
+
+    def disconnect_cb(*args):
+        sender.disconnect(handler_id)
+
+    obj.connect('destroy', disconnect_cb)
+    return handler_id
+
+
+def connect_destroy(sender, *args, **kwargs):
+    return _connect_destroy(sender, sender.connect, *args, **kwargs)
+
+
+def connect_after_destroy(sender, *args, **kwargs):
+    return _connect_destroy(sender, sender.connect_after, *args, **kwargs)
 
 
 class cached_property(object):
     """A read-only @property that is only evaluated once."""
+
     def __init__(self, fget, doc=None):
         self.fget = fget
         self.__doc__ = doc or fget.__doc__
-        self.__name__ = fget.__name__
+        self.__name__ = name = fget.__name__
+        # these get name mangled, so caching wont work unless
+        # we mangle too
+        assert not (name.startswith("__") and not name.endswith("__")), \
+            "can't cache a dunder method"
 
     def __get__(self, obj, cls):
         if obj is None:
@@ -800,3 +958,235 @@ def load_library(names, shared=True):
             errors.append(str(e))
 
     raise OSError("\n".join(errors))
+
+
+def is_main_thread():
+    """If the calling thread is the main one"""
+
+    return threading.current_thread().name == "MainThread"
+
+
+class MainRunnerError(Exception):
+    pass
+
+
+class MainRunnerAbortedError(MainRunnerError):
+    pass
+
+
+class MainRunnerTimeoutError(MainRunnerError):
+    pass
+
+
+class MainRunner(object):
+    """Schedule a function call in the main loop from a
+    worker thread and wait for the result.
+
+    Make sure to call abort() before the main loop gets destroyed, otherwise
+    the worker thread may block forever in call().
+    """
+
+    def __init__(self):
+        self._source_id = None
+        self._call_id = None
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._return = None
+        self._error = None
+        self._aborted = False
+
+    def _run(self, func, *args, **kwargs):
+        try:
+            self._return = func(*args, **kwargs)
+        except Exception as e:
+            self._error = MainRunnerError(e)
+
+    def _idle_run(self, call_id, call_event, func, *args, **kwargs):
+        call_event.set()
+        with self._lock:
+            # In case a timeout happened but this got still
+            # scheduled, this could be called after call() returns;
+            # Compare to the current call id and do nothing if it isn't ours
+            if call_id is not self._call_id:
+                return False
+            try:
+                self._run(func, *args, **kwargs)
+            finally:
+                self._source_id = None
+                self._cond.notify()
+                return False
+
+    def abort(self):
+        """After this call returns no function will be executed anymore
+        and a currently blocking call will fail with MainRunnerAbortedError.
+
+        Can be called multiple times and can not fail.
+        call() will always fail after this was called.
+        """
+
+        from gi.repository import GLib
+
+        with self._lock:
+            if self._aborted:
+                return
+            if self._source_id is not None:
+                GLib.source_remove(self._source_id)
+                self._source_id = None
+            self._aborted = True
+            self._call_id = None
+            self._error = MainRunnerAbortedError("aborted")
+            self._cond.notify()
+
+    def call(self, func, *args, **kwargs):
+        """Runs the function in the main loop and blocks until
+        it is finshed or abort() was called. In case this is called
+        from the main loop the function gets executed immediately.
+
+        The priority kwargs defines the event source priority and will
+        not be passed to func.
+
+        In case a timeout kwarg is given the call will raise
+        MainRunnerTimeoutError in case the function hasn't been scheduled
+        (doesn't mean returned) until that time. timeout is a float in seconds.
+
+        Can raise MainRunnerError in case the function raises an exception.
+        Raises MainRunnerAbortedError in case the runner was aborted.
+        Raises MainRunnerTimeoutError in case the timeout was reached.
+        """
+
+        from gi.repository import GLib
+
+        with self._lock:
+            if self._aborted:
+                raise self._error
+            self._error = None
+            # XXX: ideally this should be GLib.MainContext.default().is_owner()
+            # but that's not available in older pygobject
+            if is_main_thread():
+                kwargs.pop("priority", None)
+                self._run(func, *args, **kwargs)
+            else:
+                assert self._source_id is None
+                assert self._call_id is None
+                timeout = kwargs.pop("timeout", None)
+                call_event = threading.Event()
+                self._call_id = object()
+                self._source_id = GLib.idle_add(
+                    self._idle_run, self._call_id, call_event,
+                    func, *args, **kwargs)
+                # only wait for the result if we are sure it got scheduled
+                if call_event.wait(timeout):
+                    self._cond.wait()
+                self._call_id = None
+                if self._source_id is not None:
+                    GLib.source_remove(self._source_id)
+                    self._source_id = None
+                    raise MainRunnerTimeoutError("timeout: %r" % timeout)
+            if self._error is not None:
+                raise self._error
+            return self._return
+
+
+def re_escape(string, BAD="/.^$*+-?{,\\[]|()<>#=!:"):
+    """A re.escape which also works with unicode"""
+
+    needs_escape = lambda c: (c in BAD and "\\" + c) or c
+    return type(string)().join(map(needs_escape, string))
+
+
+def enum(cls):
+    """Class decorator for enum types::
+
+        @enum
+        class SomeEnum(object):
+            FOO = 0
+            BAR = 1
+
+    Result is an int subclass and all attributes are instances of it.
+    """
+
+    assert cls.__bases__ == (object,)
+
+    d = dict(cls.__dict__)
+    new_type = type(cls.__name__, (int,), d)
+    new_type.__module__ = cls.__module__
+
+    map_ = {}
+    for key, value in d.iteritems():
+        if key.upper() == key and isinstance(value, (int, long)):
+            value_instance = new_type(value)
+            setattr(new_type, key, value_instance)
+            map_[value] = key
+
+    def repr_(self):
+        if self in map_:
+            return "%s.%s" % (type(self).__name__, map_[self])
+        else:
+            return "%s(%s)" % (type(self).__name__, self)
+
+    setattr(new_type, "__repr__", repr_)
+
+    return new_type
+
+
+def set_process_title(title):
+    """Sets process name as visible in ps or top. Requires ctypes libc
+    and is almost certainly *nix-only. See issue 736
+    """
+
+    if os.name == "nt":
+        return
+
+    try:
+        libc = load_library(["libc.so.6", "c"])[0]
+        # 15 = PR_SET_NAME, apparently
+        libc.prctl(15, title, 0, 0, 0)
+    except (OSError, AttributeError):
+        print_d("Couldn't find module libc.so.6 (ctypes). "
+                "Not setting process title.")
+
+
+def list_unique(sequence):
+    """Takes any sequence and returns a list with all duplicate entries
+    removed while preserving the order.
+    """
+
+    l = []
+    seen = set()
+    append = l.append
+    add = seen.add
+    for v in sequence:
+        if v not in seen:
+            append(v)
+            add(v)
+    return l
+
+
+def set_win32_unicode_argv():
+    if os.name != "nt":
+        return
+
+    import ctypes
+    from ctypes import cdll, windll, wintypes
+
+    GetCommandLineW = cdll.kernel32.GetCommandLineW
+    GetCommandLineW.argtypes = []
+    GetCommandLineW.restype = wintypes.LPCWSTR
+
+    CommandLineToArgvW = windll.shell32.CommandLineToArgvW
+    CommandLineToArgvW.argtypes = [
+        wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+
+    LocalFree = windll.kernel32.LocalFree
+    LocalFree.argtypes = [wintypes.HLOCAL]
+    LocalFree.restype = wintypes.HLOCAL
+
+    argc = ctypes.c_int()
+    argv = CommandLineToArgvW(GetCommandLineW(), ctypes.byref(argc))
+    if not argv:
+        return
+
+    sys.argv = argv[max(0, argc.value - len(sys.argv)):argc.value]
+
+    LocalFree(argv)

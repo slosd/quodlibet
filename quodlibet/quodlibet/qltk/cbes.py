@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005-2011 Joe Wreschnig, Michael Urman, Christoph Reiter,
 #                     Nick Boultbee
 #
@@ -11,6 +12,7 @@ from gi.repository import Gtk, Pango, GObject
 
 from quodlibet import qltk
 from quodlibet.qltk.views import RCMHintedTreeView
+from quodlibet.util import connect_obj
 from quodlibet.qltk import entry
 
 
@@ -76,7 +78,7 @@ class _KeyValueEditor(qltk.Window):
 
         menu = Gtk.Menu()
         remove = Gtk.ImageMenuItem(label=Gtk.STOCK_REMOVE, use_stock=True)
-        remove.connect_object('activate', self.__remove, view)
+        connect_obj(remove, 'activate', self.__remove, view)
         qltk.add_fake_accel(remove, "Delete")
         menu.append(remove)
         menu.show_all()
@@ -85,22 +87,26 @@ class _KeyValueEditor(qltk.Window):
         rem_b = Gtk.Button(stock=Gtk.STOCK_REMOVE)
         rem_b.set_sensitive(False)
         bbox.pack_start(rem_b, True, True, 0)
+        self.use_header_bar()
         close = Gtk.Button(stock=Gtk.STOCK_CLOSE)
-        bbox.pack_start(close, True, True, 0)
+        if not self.has_close_button():
+            bbox.pack_start(close, True, True, 0)
+        else:
+            bbox.set_layout(Gtk.ButtonBoxStyle.START)
         self.get_child().pack_start(bbox, False, True, 0)
 
         selection = view.get_selection()
-        name.connect_object('activate', Gtk.Entry.grab_focus, self.value)
-        self.value.connect_object('activate', Gtk.Button.clicked, add)
+        connect_obj(name, 'activate', Gtk.Entry.grab_focus, self.value)
+        connect_obj(self.value, 'activate', Gtk.Button.clicked, add)
         self.value.connect('changed', self.__changed, [add])
-        add.connect_object(
+        connect_obj(add,
             'clicked', self.__add, selection, name, self.value, self.model)
         selection.connect('changed', self.__set_text, name, self.value, rem_b)
         view.connect('popup-menu', self.__popup, menu)
-        rem_b.connect_object('clicked', self.__remove, view)
-        close.connect_object('clicked', qltk.Window.destroy, self)
+        connect_obj(rem_b, 'clicked', self.__remove, view)
+        connect_obj(close, 'clicked', qltk.Window.destroy, self)
         view.connect('key-press-event', self.__view_key_press)
-        self.connect_object('destroy', Gtk.Menu.destroy, menu)
+        connect_obj(self, 'destroy', Gtk.Menu.destroy, menu)
 
         name.grab_focus()
         self.get_child().show_all()
@@ -149,7 +155,7 @@ class CBESEditor(_KeyValueEditor):
         self.cbes = cbes
         super(CBESEditor, self).__init__(title, validator)
         self.set_transient_for(qltk.get_top_parent(cbes))
-        self.connect_object('destroy', self.__finish, cbes)
+        connect_obj(self, 'destroy', self.__finish, cbes)
         self.value.set_text(cbes.get_child().get_text())
 
     def fill_values(self):
@@ -194,7 +200,7 @@ class StandaloneEditor(_KeyValueEditor):
         self.filename = filename
         self.initial = initial or []
         super(StandaloneEditor, self).__init__(title, validator)
-        self.connect_object('destroy', self.write, True)
+        connect_obj(self, 'destroy', self.write, True)
 
     def fill_values(self):
         filename = self.filename + ".saved"
@@ -244,7 +250,7 @@ class ComboBoxEntrySave(Gtk.ComboBox):
 
     def __init__(self, filename=None, initial=[], count=5, id=None,
                  validator=None, title=_("Saved Values"),
-                 edit_title=_("Edit saved values...")):
+                 edit_title=_(u"Edit saved values…")):
         self.count = count
         self.filename = filename
         id = filename or id
@@ -274,8 +280,8 @@ class ComboBoxEntrySave(Gtk.ComboBox):
         self.remove(self.get_child())
         self.add(entry.ValidatingEntry(validator))
 
-        self.connect_object('destroy', self.set_model, None)
-        self.connect_object('changed', self.__changed, model,
+        connect_obj(self, 'destroy', self.set_model, None)
+        connect_obj(self, 'changed', self.__changed, model,
             validator, title)
 
     def enable_clear_button(self):

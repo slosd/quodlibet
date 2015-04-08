@@ -13,25 +13,27 @@
 # Quod Libet code, which is GPLv2 as well, so I thought it safe to add this.
 
 import os
+import sys
 
-if os.name == "nt":
+if os.name == "nt" or sys.platform == "darwin":
     from quodlibet.plugins import PluginNotSupportedError
     raise PluginNotSupportedError
 
 import re
-import tempfile
 
 import dbus
 from gi.repository import Gtk, GObject, GLib
 
 from quodlibet import config, qltk, app
 from quodlibet.plugins.events import EventPlugin
-from quodlibet.parse import XMLFromPattern
+from quodlibet.pattern import XMLFromPattern
 from quodlibet.qltk.textedit import TextView, TextBuffer
 from quodlibet.qltk.entry import UndoEntry
 from quodlibet.qltk.msg import ErrorMessage
 from quodlibet.util import unescape
 from quodlibet.util.uri import URI
+from quodlibet.util import connect_obj
+
 
 # configuration stuff
 DEFAULT_CONFIG = {
@@ -68,7 +70,7 @@ class PreferencesWidget(Gtk.VBox):
         self.plugin_instance = plugin_instance
 
         # notification text settings
-        table = Gtk.Table(2, 3)
+        table = Gtk.Table(n_rows=2, n_columns=3)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
@@ -92,7 +94,7 @@ class PreferencesWidget(Gtk.VBox):
         title_revert.add(Gtk.Image.new_from_stock(
             Gtk.STOCK_REVERT_TO_SAVED, Gtk.IconSize.MENU))
         title_revert.set_tooltip_text(_("Revert to default pattern"))
-        title_revert.connect_object(
+        connect_obj(title_revert,
             "clicked", title_entry.set_text, DEFAULT_CONFIG["titlepattern"])
         table.attach(title_revert, 2, 3, 0, 1,
                      xoptions=Gtk.AttachOptions.SHRINK)
@@ -117,16 +119,14 @@ class PreferencesWidget(Gtk.VBox):
         body_label.set_mnemonic_widget(body_textview)
         table.attach(body_label, 0, 1, 1, 2, xoptions=Gtk.AttachOptions.SHRINK)
 
-        revert_align = Gtk.Alignment()
         body_revert = Gtk.Button()
         body_revert.add(Gtk.Image.new_from_stock(
                         Gtk.STOCK_REVERT_TO_SAVED, Gtk.IconSize.MENU))
         body_revert.set_tooltip_text(_("Revert to default pattern"))
-        body_revert.connect_object(
+        connect_obj(body_revert,
             "clicked", body_textbuffer.set_text, DEFAULT_CONFIG["bodypattern"])
-        revert_align.add(body_revert)
         table.attach(
-            revert_align, 2, 3, 1, 2,
+            body_revert, 2, 3, 1, 2,
             xoptions=Gtk.AttachOptions.SHRINK,
             yoptions=Gtk.AttachOptions.FILL | Gtk.AttachOptions.SHRINK)
 
@@ -189,8 +189,9 @@ class PreferencesWidget(Gtk.VBox):
             all_radio.set_active(True)
             set_conf_value("show_notifications", "all")
 
-        focus_check = Gtk.CheckButton(_("Only when the main window is not "
-                                        "_focused"))
+        focus_check = Gtk.CheckButton(
+            label=_("Only when the main window is not _focused"),
+            use_underline=True)
         focus_check.set_active(get_conf_bool("show_only_when_unfocused"))
         focus_check.connect("toggled", self.on_checkbutton_toggled,
                             "show_only_when_unfocused")
@@ -237,9 +238,8 @@ class PreferencesWidget(Gtk.VBox):
 class Notify(EventPlugin):
     PLUGIN_ID = "Notify"
     PLUGIN_NAME = _("Song Notifications")
-    PLUGIN_DESC = _("Display a notification when the song changes.")
+    PLUGIN_DESC = _("Displays a notification when the song changes.")
     PLUGIN_ICON = Gtk.STOCK_DIALOG_INFO
-    PLUGIN_VERSION = "1.1"
 
     DBUS_NAME = "org.freedesktop.Notifications"
     DBUS_IFACE = "org.freedesktop.Notifications"
@@ -273,7 +273,7 @@ class Notify(EventPlugin):
         self.__disable_watch()
         self.__disconnect()
         self.__enabled = False
-        self.__image_fp = None
+        self._set_image_fileobj(None)
 
     def __enable_watch(self):
         """Enable events for dbus name owner change"""
@@ -333,6 +333,22 @@ class Notify(EventPlugin):
         else:
             self.__last_id = 0
 
+    def _set_image_fileobj(self, fileobj):
+        if self.__image_fp is not None:
+            self.__image_fp.close()
+            self.__image_fp = None
+        self.__image_fp = fileobj
+
+    def _get_image_uri(self, song):
+        """A unicode file URI or an empty string"""
+
+        fileobj = app.cover_manager.get_cover(song)
+        self._set_image_fileobj(fileobj)
+        if fileobj:
+            image_path = fileobj.name
+            return URI.frompath(image_path).decode("utf-8")
+        return u""
+
     def show_notification(self, song):
         """Returns True if showing the notification was successful"""
 
@@ -384,22 +400,6 @@ class Notify(EventPlugin):
             if "body-images" not in caps:
                 body = strip_images(body)
 
-        image_path = ""
-        if "icon-static" in caps:
-            self.__image_fp = song.find_cover()
-            if self.__image_fp:
-                image_path = self.__image_fp.name
-
-        is_temp = image_path.startswith(tempfile.gettempdir())
-
-        # If it is not an embeded cover, drop the file handle
-        if not is_temp:
-            self.__image_fp = None
-
-        # spec recommends it, and it seems to work
-        if image_path and spec >= (1, 1):
-            image_path = URI.frompath(image_path)
-
         actions = []
         if "actions" in caps:
             actions = ["next", _("Next")]
@@ -408,10 +408,15 @@ class Notify(EventPlugin):
             "desktop-entry": "quodlibet",
         }
 
+        image_uri = self._get_image_uri(song)
+        if image_uri:
+            hints["image_path"] = image_uri
+            hints["image-path"] = image_uri
+
         try:
             self.__last_id = iface.Notify(
                 "Quod Libet", self.__last_id,
-                image_path, title, body, actions, hints,
+                image_uri, title, body, actions, hints,
                 get_conf_int("timeout"))
         except dbus.DBusException:
             print_w("[notify] %s" %

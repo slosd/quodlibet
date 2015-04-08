@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006 Joe Wreschnig
 #
 # This program is free software; you can redistribute it and/or modify
@@ -12,14 +13,14 @@ from quodlibet import app
 from quodlibet import config
 from quodlibet.plugins.events import EventPlugin
 from quodlibet.qltk.entry import ValidatingEntry
+from quodlibet.util import connect_obj
 
 
 class Alarm(EventPlugin):
     PLUGIN_ID = "Alarm Clock"
     PLUGIN_NAME = _("Alarm Clock")
-    PLUGIN_DESC = _("Wake you up with loud music.")
+    PLUGIN_DESC = _("Wakes you up with loud music.")
     PLUGIN_ICON = Gtk.STOCK_DIALOG_INFO
-    PLUGIN_VERSION = "0.22"
 
     _pref_name = "alarm_times"
     _times = ["HH:MM"] * 7
@@ -88,7 +89,7 @@ class Alarm(EventPlugin):
             return True
 
     def PluginPreferences(self, parent):
-        t = Gtk.Table(2, 7)
+        t = Gtk.Table(n_rows=2, n_columns=7)
         t.set_col_spacings(6)
         entries = []
         for i in range(7):
@@ -98,7 +99,7 @@ class Alarm(EventPlugin):
             e.set_max_length(5)
             e.set_width_chars(6)
             day = Gtk.Label(
-                time.strftime("_%A:", (2000, 1, 1, 0, 0, 0, i, 1, 0)))
+                label=time.strftime("_%A:", (2000, 1, 1, 0, 0, 0, i, 1, 0)))
             day.set_mnemonic_widget(e)
             day.set_use_underline(True)
             day.set_alignment(0.0, 0.5)
@@ -106,16 +107,15 @@ class Alarm(EventPlugin):
             t.attach(e, 1, 2, i, i + 1, xoptions=Gtk.AttachOptions.FILL)
             entries.append(e)
         for e in entries:
-            e.connect_object('changed', self._entry_changed, entries)
+            connect_obj(e, 'changed', self._entry_changed, entries)
         return t
 
 
 class Lullaby(Alarm):
     PLUGIN_ID = "Lullaby"
     PLUGIN_NAME = _("Lullaby")
-    PLUGIN_DESC = _("Fade out and pause your music.")
+    PLUGIN_DESC = _("Fades out and pauses your music.")
     PLUGIN_ICON = Gtk.STOCK_MEDIA_PAUSE
-    PLUGIN_VERSION = "0.20"
 
     _pref_name = "lullaby_times"
 

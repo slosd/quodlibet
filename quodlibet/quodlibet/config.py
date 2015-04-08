@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2004-2008 Joe Wreschnig
 #           2009-2014 Nick Boultbee
 #           2011-2014 Christoph Reiter
@@ -6,9 +7,6 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
-from StringIO import StringIO
-import csv
-import os
 import shutil
 
 import const
@@ -31,7 +29,7 @@ INITIAL = {
         "gst_pipeline": "",
         "gst_buffer": "1.5", # stream buffer duration in seconds
         "gst_device": "",
-        "gst_disable_gapless": "true",
+        "gst_disable_gapless": "false",
     },
     "library": {
         "exclude": "",
@@ -115,6 +113,9 @@ INITIAL = {
         # search as soon as text is typed into search box
         "eager_search": "true",
 
+        # tags which get searched in addition to the ones present in the
+        # song list, separate with ","
+        "search_tags": "",
     },
     "rename": {
         "spaces": "false",
@@ -141,7 +142,8 @@ INITIAL = {
         "save_email": const.EMAIL,
         "alltags": "true", # show all tags, or just "human-readable" ones
         # Skip dialog to save or revert changes
-        "auto_save_changes": "false"
+        "auto_save_changes": "false",
+        "default_tags": "", # e.g. "title,artist"
     },
     "albumart": {
         "round": "true", # use rounded corners for artwork thumbnails
@@ -153,7 +155,7 @@ INITIAL = {
 
 
 # global instance
-_config = Config()
+_config = Config(version=0)
 
 options = _config.options
 get = _config.get
@@ -162,11 +164,16 @@ getint = _config.getint
 getfloat = _config.getfloat
 getstringlist = _config.getstringlist
 setstringlist = _config.setstringlist
+getlist = _config.getlist
+setlist = _config.setlist
 set = _config.set
 setdefault = _config.setdefault
 write = _config.write
 reset = _config.reset
 add_section = _config.add_section
+has_option = _config.has_option
+remove_option = _config.remove_option
+register_upgrade_function = _config.register_upgrade_function
 
 
 def init(filename=None, initial=None):
@@ -174,14 +181,6 @@ def init(filename=None, initial=None):
         raise ValueError(
             "config initialized twice without quitting: %r"
             % _config.sections())
-
-    # <=2.2.1 QL created the user folder in the profile folder
-    # but it should be in the appdata folder, so move it.
-    if os.name == "nt":
-        old_dir = os.path.join(os.path.expanduser("~"), ".quodlibet")
-        new_dir = const.USERDIR
-        if not os.path.isdir(new_dir) and os.path.isdir(old_dir):
-            shutil.move(old_dir, new_dir)
 
     if initial is None:
         initial = INITIAL
@@ -203,12 +202,6 @@ def init(filename=None, initial=None):
             except EnvironmentError:
                 pass
 
-    # revision 94d389a710f1
-    from_ = ("settings", "round")
-    if _config.has_option(*from_):
-        _config.set("albumart", "round", _config.get(*from_))
-        _config.remove_option(*from_)
-
 
 def save(filename):
     """Writes the active config to filename, ignoring all possible errors"""
@@ -228,55 +221,6 @@ def quit():
 
 def state(arg):
     return _config.getboolean("settings", arg)
-
-
-# Cache
-__songlist_columns = None
-
-
-def get_columns(refresh=False):
-    """
-    Gets the list of songlist column headings, caching unless `refresh` is True
-
-    This migrates from old to new format if necessary.
-    """
-    global __songlist_columns
-    if not refresh and __songlist_columns:
-        return __songlist_columns
-    try:
-        __songlist_columns = [str(s).lower()
-                              for s in getstringlist("settings", "columns")]
-        return __songlist_columns
-    except Error:
-        try:
-            __songlist_columns = columns = get("settings", "headers").split()
-        except Error:
-            return const.DEFAULT_COLUMNS
-        else:
-            print_d("Migrating from settings.headers to settings.columns...")
-            setstringlist("settings", "columns", columns)
-            print_d("Removing settings.headers...")
-            _config.remove_option("settings", "headers")
-            return columns
-
-
-def set_columns(vals, force=False):
-    """
-    Persists the settings for songlist headings held in `vals`
-    Will override the cache if `force` is True
-    """
-    global __songlist_columns
-    if vals != __songlist_columns or force:
-        print_d("Writing: %r" % vals)
-        vals = [str(col).lower() for col in vals]
-        setstringlist("settings", "columns", vals)
-        __songlist_columns = vals
-    else:
-        print_d("No change in columns to write")
-
-
-def cached_config():
-    pass
 
 
 class RatingsPrefs(object):

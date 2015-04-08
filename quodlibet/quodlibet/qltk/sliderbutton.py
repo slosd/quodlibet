@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig, Michael Urman
 #           2013 Christoph Reiter
 #
@@ -8,7 +9,7 @@
 from gi.repository import Gtk, Gdk
 
 from quodlibet.qltk import get_top_parent
-from quodlibet.qltk.x import Alignment
+from quodlibet.qltk.x import Align
 
 
 class PrimaryWarpsRange(Gtk.Range):
@@ -74,6 +75,8 @@ class _PopupSlider(Gtk.Button):
         frame.add(self._box)
         self.connect('scroll-event', self.__scroll, hscale)
 
+        self.connect("destroy", self.__destroy)
+
         # forward scroll event to the button
         def foward_scroll(scale, event):
             self.emit('scroll-event', event.copy())
@@ -94,6 +97,10 @@ class _PopupSlider(Gtk.Button):
         if child:
             self.get_child().show_all()
 
+    def __destroy(self, *args):
+        self.__window.destroy()
+        self.__window = None
+
     def set_slider_length(self, length):
         if self.ORIENTATION == Gtk.Orientation.HORIZONTAL:
             self.scale.set_size_request(length, -1)
@@ -105,7 +112,7 @@ class _PopupSlider(Gtk.Button):
 
     def set_slider_widget(self, widget):
         self._box.pack_start(
-            Alignment(widget, left=3, right=3), False, True, 0)
+            Align(widget, left=3, right=3), False, True, 0)
 
     def _move_to(self, x, y, w, h, ww, wh, pad=3):
         raise NotImplementedError

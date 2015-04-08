@@ -12,13 +12,15 @@ from gi.repository import Gtk, Pango
 from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
+from quodlibet import app
 
 from quodlibet.qltk.bookmarks import EditBookmarksPane
 from quodlibet.qltk.cover import CoverImage
 from quodlibet.qltk.lyrics import LyricsPane
-from quodlibet.qltk.x import Window
-from quodlibet.qltk.window import PersistentWindowMixin
-from quodlibet.util import tag
+from quodlibet.qltk.window import Window, PersistentWindowMixin
+from quodlibet.qltk.x import Align
+from quodlibet.util import tag, connect_destroy
+from quodlibet.util.tags import readable
 from quodlibet.util.path import fsdecode, filesize, unexpand
 
 
@@ -35,8 +37,7 @@ def Frame(name, widget):
     l = Gtk.Label()
     l.set_markup("<u><b>%s</b></u>" % name)
     f.set_label_widget(l)
-    a = Gtk.Alignment.new(xalign=0, yalign=0, xscale=1, yscale=1)
-    a.set_padding(3, 0, 12, 0)
+    a = Align(top=3, left=12)
     f.add(a)
     a.add(widget)
     return f
@@ -77,8 +78,7 @@ class OneSong(qltk.Notebook):
         bookmarks.set_border_width(12)
         self.append_page(bookmarks)
 
-        s = library.connect('changed', self.__check_changed, vbox, song)
-        self.connect_object('destroy', library.disconnect, s)
+        connect_destroy(library, 'changed', self.__check_changed, vbox, song)
 
     def __check_changed(self, library, songs, vbox, song):
         if song in songs:
@@ -163,20 +163,15 @@ class OneSong(qltk.Notebook):
             vb.pack_start(l, False, True, 0)
         else:
             title = tag("~people")
-        for names, tag_ in [
-            ("performers", "performer"),
-            ("lyricists", "lyricist"),
-            ("arrangers", "arranger"),
-            ("composers", "composer"),
-            ("conductors", "conductor"),
-            ("authors", "author")]:
+        for tag_ in ["performer", "lyricist", "arranger", "composer",
+                     "conductor", "author"]:
             if tag_ in song:
                 l = Label(song[tag_])
                 l.set_ellipsize(Pango.EllipsizeMode.END)
                 if len(song.list(tag_)) == 1:
                     name = tag(tag_)
                 else:
-                    name = _(names)
+                    name = readable(tag_, plural=True)
                 vb.pack_start(Frame(util.capitalize(name), l), False, False, 0)
         performers = {}
         for tag_ in song:
@@ -232,22 +227,25 @@ class OneSong(qltk.Notebook):
             lastplayed = _("Never")
         added = ftime(song.get("~#added", 0))
         rating = song("~rating")
+        has_rating = "~#rating" in song
 
         t = Gtk.Table(n_rows=5, n_columns=2)
         t.set_col_spacings(6)
         t.set_homogeneous(False)
-        table = [(_("added"), added),
-                 (_("last played"), lastplayed),
-                 (_("plays"), playcount),
-                 (_("skips"), skipcount),
-                 (_("rating"), rating)]
+        table = [(_("added"), added, True),
+                 (_("last played"), lastplayed, True),
+                 (_("plays"), playcount, True),
+                 (_("skips"), skipcount, True),
+                 (_("rating"), rating, has_rating)]
 
-        for i, (l, r) in enumerate(table):
+        for i, (l, r, s) in enumerate(table):
             l = "<b>%s</b>" % util.capitalize(util.escape(l) + ":")
             lab = Label()
             lab.set_markup(l)
             t.attach(lab, 0, 1, i + 1, i + 2, xoptions=Gtk.AttachOptions.FILL)
-            t.attach(Label(r), 1, 2, i + 1, i + 2)
+            label = Label(r)
+            label.set_sensitive(s)
+            t.attach(label, 1, 2, i + 1, i + 2)
 
         box.pack_start(Frame(_("Library"), t), False, False, 0)
 
@@ -478,7 +476,9 @@ class OneArtist(qltk.Notebook):
                 return "%s (%s)" % (album, date[:4])
             else:
                 return album
-        covers = [(a, s.find_cover(), s) for d, s, a in albums]
+
+        get_cover = app.cover_manager.get_cover
+        covers = [(a, get_cover(s), s) for d, s, a in albums]
         albums = map(format, albums)
         if noalbum:
             albums.append(ngettext("%d song with no album",
@@ -589,16 +589,14 @@ class Information(Window, PersistentWindowMixin):
     def __init__(self, library, songs, parent=None):
         super(Information, self).__init__(dialog=False)
         self.set_default_size(400, 400)
+        self.set_transient_for(qltk.get_top_parent(parent))
         self.enable_window_tracking("quodlibet_information")
         if len(songs) > 1:
-            sig = library.connect('changed', self.__check_changed)
-            self.connect_object('destroy', library.disconnect, sig)
+            connect_destroy(library, 'changed', self.__check_changed)
         if len(songs) > 0:
-            sig = library.connect('removed', self.__check_removed)
-            self.connect_object('destroy', library.disconnect, sig)
+            connect_destroy(library, 'removed', self.__check_removed)
         self.__songs = songs
         self.__update(library)
-        self.set_transient_for(qltk.get_top_parent(parent))
         self.get_child().show_all()
 
     def __check_changed(self, library, songs):

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig
 #
 # This program is free software; you can redistribute it and/or modify
@@ -23,10 +24,9 @@ format = """\
 
 class JEP118(EventPlugin):
     PLUGIN_ID = "JEP-118"
-    PLUGIN_NAME = "JEP-118"
-    PLUGIN_DESC = "Output a Jabber User Tunes file to ~/.quodlibet/jabber"
+    PLUGIN_NAME = _("JEP-118")
+    PLUGIN_DESC = _("Outputs a Jabber User Tunes file to ~/.quodlibet/jabber.")
     PLUGIN_ICON = 'gtk-save'
-    PLUGIN_VERSION = "0.13"
 
     def plugin_on_song_started(self, song):
         if song is None:

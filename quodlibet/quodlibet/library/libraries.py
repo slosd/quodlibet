@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006 Joe Wreschnig
 #           2013,2014 Nick Boultbee
 #           2013,2014 Christoph Reiter
@@ -12,16 +13,17 @@ These classes are the most basic library classes. As such they are the
 least useful but most content-agnostic.
 """
 
+from pickle import Unpickler
+from cStringIO import StringIO
 import cPickle as pickle
 import os
 import shutil
-import threading
 import time
 
 from gi.repository import GObject, Gio
 
 from quodlibet.formats import MusicFile
-from quodlibet.parse import Query
+from quodlibet.query import Query
 from quodlibet.qltk.notif import Task
 from quodlibet import config
 from quodlibet.util import copool
@@ -221,6 +223,34 @@ def dump_items(filename, items):
         pickle.dump(items, fileobj, 1)
 
 
+def unpickle_save(data, default, type_=dict):
+    """Unpickle a list of `type_` subclasses and skip items for which the
+    class is missing.
+
+    In case not just the class lookup fails, returns default.
+    """
+
+    class dummy(type_):
+        pass
+
+    class SaveUnpickler(Unpickler):
+
+        def find_class(self, module, name):
+            try:
+                return Unpickler.find_class(self, module, name)
+            except (ImportError, AttributeError):
+                return dummy
+
+    fileobj = StringIO(data)
+
+    try:
+        items = SaveUnpickler(fileobj).load()
+    except Exception:
+        return default
+
+    return [i for i in items if not isinstance(i, dummy)]
+
+
 def load_items(filename, default=None):
     """Load items from disk.
 
@@ -258,7 +288,10 @@ def load_items(filename, default=None):
         except EnvironmentError:
             util.print_exc()
 
-        items = default
+        # try to skip items for which the class is missing
+        # XXX: we assume the items are dict subclasses here.. while nothing
+        # else does
+        items = unpickle_save(data, default)
 
     return items
 
@@ -267,9 +300,6 @@ class PicklingMixin(object):
     """A mixin to provide persistence of a library by pickling to disk"""
 
     filename = None
-
-    def __init__(self):
-        self._save_lock = threading.Lock()
 
     def load(self, filename):
         """Load a library from a file, containing a picked list.
@@ -294,15 +324,14 @@ class PicklingMixin(object):
         if filename is None:
             filename = self.filename
 
-        with self._save_lock:
-            print_d("Saving contents to %r." % filename, self)
+        print_d("Saving contents to %r." % filename, self)
 
-            try:
-                dump_items(filename, self.get_content())
-            except EnvironmentError:
-                print_w("Couldn't save library to path: %r" % filename)
-            else:
-                self.dirty = False
+        try:
+            dump_items(filename, self.get_content())
+        except EnvironmentError:
+            print_w("Couldn't save library to path: %r" % filename)
+        else:
+            self.dirty = False
 
 
 class PicklingLibrary(Library, PicklingMixin):
@@ -700,7 +729,7 @@ class FileLibrary(PicklingLibrary):
                 fullpath = expanduser(fullpath)
                 if filter(fullpath.startswith, exclude):
                     continue
-                for path, dnames, fnames in os.walk(util.fsnative(fullpath)):
+                for path, dnames, fnames in os.walk(fullpath):
                     self._process_scanned_dirs(path, dnames)
                     for filename in fnames:
                         fullfilename = os.path.join(path, filename)
@@ -972,13 +1001,14 @@ class SongFileLibrary(SongLibrary, WatchedFileLibrary):
         Otherwise, None is returned.
         """
 
+        key = normalize_path(filename, True)
         song = None
-        if filename not in self._contents:
+        if key not in self._contents:
             song = MusicFile(filename)
             if song and add:
                 self.add([song])
         else:
             print_d("Already got file %r." % filename)
-            song = self._contents[filename]
+            song = self._contents[key]
 
         return song

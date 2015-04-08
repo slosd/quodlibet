@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Christoph Reiter <reiter.christoph@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify
@@ -240,7 +241,10 @@ class MPDService(object):
         self._idle_subscriptions[connection] = subsystems
 
     def unregister_idle(self, connection):
-        del self._idle_subscriptions[connection]
+        try:
+            del self._idle_subscriptions[connection]
+        except KeyError:
+            pass
 
     def emit_changed(self, subsystem):
         for conn, subs in self._idle_subscriptions.iteritems():
@@ -260,8 +264,11 @@ class MPDService(object):
     def playid(self, songid):
         self.play()
 
-    def pause(self):
-        self._app.player.paused = True
+    def pause(self, value=None):
+        if value is None:
+            self._app.player.paused = not self._app.player.paused
+        else:
+            self._app.player.paused = value
 
     def stop(self):
         self._app.player.stop()
@@ -323,8 +330,7 @@ class MPDService(object):
 
         if info:
             if app.player.paused:
-                # XXX: should be pause, MPDroid doesn't like it
-                state = "stop"
+                state = "pause"
             else:
                 state = "play"
         else:
@@ -338,6 +344,7 @@ class MPDService(object):
             ("consume", 0),
             ("playlist", self._pl_ver),
             ("playlistlength", int(bool(app.player.info))),
+            ("mixrampdb", 0.0),
             ("state", state),
         ]
 
@@ -348,10 +355,14 @@ class MPDService(object):
             status.extend([
                 ("song", 0),
                 ("songid", self._get_id(info)),
-                ("time", "%d:%d" % (elapsed_time, total_time)),
-                ("elapsed", elapsed_exact),
-                ("bitrate", info("~#bitrate")),
             ])
+
+            if state != "stop":
+                status.extend([
+                    ("time", "%d:%d" % (elapsed_time, total_time)),
+                    ("elapsed", elapsed_exact),
+                    ("bitrate", info("~#bitrate")),
+                ])
 
         return status
 
@@ -368,8 +379,8 @@ class MPDService(object):
 
         return u"\n".join(parts)
 
-    def playlistinfo(self, start, end):
-        if start > 1:
+    def playlistinfo(self, start=None, end=None):
+        if start is not None and start > 1:
             return None
 
         return self.currentsong()
@@ -380,6 +391,15 @@ class MPDService(object):
     def plchanges(self, version):
         if version != self._pl_ver:
             return self.currentsong()
+
+    def plchangesposid(self, version):
+        info = self._app.player.info
+        if version != self._pl_ver and info:
+            parts = []
+            parts.append(u"file: %s" % info("~filename"))
+            parts.append(u"Pos: %d" % 0)
+            parts.append(u"Id: %d" % self._get_id(info))
+            return u"\n".join(parts)
 
 
 class MPDServer(BaseTCPServer):
@@ -436,24 +456,25 @@ class MPDConnection(BaseTCPConnection):
     def handle_read(self, data):
         self._feed_data(data)
 
-        line = self._get_next_line()
-        if line is None:
-            return
+        while 1:
+            line = self._get_next_line()
+            if line is None:
+                break
 
-        self.log(u"-> " + repr(line))
+            self.log(u"-> " + repr(line))
 
-        try:
-            cmd, args = parse_command(line)
-        except ParseError:
-            # TODO: not sure what to do here re command lists
-            return
+            try:
+                cmd, args = parse_command(line)
+            except ParseError:
+                # TODO: not sure what to do here re command lists
+                continue
 
-        try:
-            self._handle_command(cmd, args)
-        except MPDRequestError as e:
-            self._error(e.msg, e.code, e.index)
-            self._use_command_list = False
-            del self._command_list[:]
+            try:
+                self._handle_command(cmd, args)
+            except MPDRequestError as e:
+                self._error(e.msg, e.code, e.index)
+                self._use_command_list = False
+                del self._command_list[:]
 
     def handle_write(self):
         data = self._buf[:]
@@ -485,7 +506,7 @@ class MPDConnection(BaseTCPConnection):
         try:
             index = self._read_buf.index("\n")
         except ValueError:
-            return None, []
+            return None
 
         line = bytes(self._read_buf[:index])
         del self._read_buf[:index + 1]
@@ -527,9 +548,6 @@ class MPDConnection(BaseTCPConnection):
                     # reraise with index
                     raise MPDRequestError(e.msg, e.code, i)
 
-                if self._command_list_ok:
-                    self.write_line(U"list_OK")
-
             self.ok()
             self._use_command_list = False
             del self._command_list[:]
@@ -542,27 +560,34 @@ class MPDConnection(BaseTCPConnection):
             self._use_command_list = True
             self._command_list_ok = command == u"command_list_ok_begin"
             assert not self._command_list
-            self.ok()
             return
 
         if self._use_command_list:
             self._command_list.append((command, args))
-            self.ok()
         else:
             self._exec_command(command, args)
 
-    def _exec_command(self, command, args):
+    def _exec_command(self, command, args, no_ack=False):
         self._command = command
 
         if command not in self._commands:
             print_w("Unhandled command %r, sending OK." % command)
+            command = "ping"
+
             # Unhandled command, default to OK for now..
-            self.ok()
+            if not self._use_command_list:
+                self.ok()
+            elif self._command_list_ok:
+                self.write_line(u"list_OK")
             return
 
         cmd, do_ack = self._commands[command]
         cmd(self, self.service, args)
-        if do_ack:
+
+        if self._use_command_list:
+            if self._command_list_ok:
+                self.write_line(u"list_OK")
+        elif do_ack:
             self.ok()
 
     _commands = {}
@@ -626,6 +651,11 @@ def _cmd_idle(conn, service, args):
     service.register_idle(conn, args)
 
 
+@MPDConnection.Command("ping")
+def _cmd_ping(conn, service, args):
+    return
+
+
 @MPDConnection.Command("noidle")
 def _cmd_noidle(conn, service, args):
     service.unregister_idle(conn)
@@ -650,7 +680,11 @@ def _cmd_playid(conn, service, args):
 
 @MPDConnection.Command("pause")
 def _cmd_pause(conn, service, args):
-    service.pause()
+    value = None
+    if args:
+        _verify_length(args, 1)
+        value = _parse_bool(args[0])
+    service.pause(value)
 
 
 @MPDConnection.Command("stop")
@@ -732,6 +766,15 @@ def _cmd_plchanges(conn, service, args):
         conn.write_line(changes)
 
 
+@MPDConnection.Command("plchangesposid")
+def _cmd_plchangesposid(conn, service, args):
+    _verify_length(args, 1)
+    version = _parse_int(args[0])
+    changes = service.plchangesposid(version)
+    if changes is not None:
+        conn.write_line(changes)
+
+
 @MPDConnection.Command("listallinfo")
 def _cmd_listallinfo(*args):
     _cmd_currentsong(*args)
@@ -780,7 +823,7 @@ def _cmd_outputs(conn, service, args):
 @MPDConnection.Command("commands")
 def _cmd_commands(conn, service, args):
     for name in conn.list_commands():
-        conn.write_line(unicode(name))
+        conn.write_line(u"command: " + unicode(name))
 
 
 @MPDConnection.Command("tagtypes")
@@ -797,9 +840,12 @@ def _cmd_lsinfo(conn, service, args):
 
 @MPDConnection.Command("playlistinfo")
 def _cmd_playlistinfo(conn, service, args):
-    _verify_length(args, 1)
-    start, end = _parse_range(args[0])
-    result = service.playlistinfo(start, end)
+    if args:
+        _verify_length(args, 1)
+        start, end = _parse_range(args[0])
+        result = service.playlistinfo(start, end)
+    else:
+        result = service.playlistinfo()
     if result is not None:
         conn.write_line(result)
 

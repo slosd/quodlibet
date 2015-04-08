@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig
 #           2012 Christoph Reiter
 #      2011-2014 Nick Boultbee
+#           2014 Jan Path
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -8,14 +10,13 @@
 
 import time
 import datetime
-from collections import deque
 
 from gi.repository import Gtk, Pango, GLib
 
 from quodlibet import util
 from quodlibet import config
 from quodlibet import const
-from quodlibet.parse import Pattern
+from quodlibet.pattern import Pattern
 from quodlibet.qltk.views import TreeViewColumnButton
 from quodlibet.util.path import fsdecode, unexpand
 from quodlibet.formats._audio import FILESYSTEM_TAGS
@@ -30,7 +31,7 @@ def create_songlist_column(t):
         return LengthColumn()
     elif t == "~#filesize":
         return FilesizeColumn()
-    elif t in ["~rating", "~#rating"]:
+    elif t in ["~rating"]:
         return RatingColumn()
     elif t.startswith("~#"):
         return NumericColumn(t)
@@ -109,13 +110,13 @@ class TextColumn(SongListColumn):
 
 
 class RatingColumn(TextColumn):
-    """Render ~#rating directly
+    """Render ~rating directly
 
     (simplifies filtering, saves a function call).
     """
 
     def __init__(self, *args, **kwargs):
-        super(RatingColumn, self).__init__("~#rating", *args, **kwargs)
+        super(RatingColumn, self).__init__("~rating", *args, **kwargs)
         self.set_expand(False)
         self.set_resizable(False)
         width = self._cell_width(util.format_rating(1.0))
@@ -123,10 +124,15 @@ class RatingColumn(TextColumn):
         self.set_min_width(width)
 
     def _cdf(self, column, cell, model, iter_, user_data):
-        value = model.get_value(iter_).get(
-            "~#rating", config.RATINGS.default)
-        if not self._needs_update(value):
+        song = model.get_value(iter_)
+        rating = song.get("~#rating")
+        default = config.RATINGS.default
+
+        if not self._needs_update((rating, default)):
             return
+
+        cell.set_sensitive(rating is not None)
+        value = rating if rating is not None else default
         cell.set_property('text', util.format_rating(value))
 
 
@@ -252,7 +258,12 @@ class NumericColumn(TextColumn):
         value = model.get_value(iter_).comma(self.header_name)
         if not self._needs_update(value):
             return
-        text = unicode(value)
+
+        if isinstance(value, float):
+            text = u"%.2f" % round(value, 2)
+        else:
+            text = unicode(value)
+
         cell.set_property('text', text)
         self._recalc_width(model.get_path(iter_), text)
 
@@ -279,14 +290,13 @@ class NumericColumn(TextColumn):
 
         # resize if too small or way too big and above the minimum
         width = self.get_width()
-        max_width = max(self._texts.values() or [width])
-        if width < max_width:
-            self.set_fixed_width(max_width)
-            self.set_min_width(max_width)
-        elif (width - max_width >= self._single_char_width and
-                max_width >= self.__min_width):
-            self.set_fixed_width(max_width)
-            self.set_max_width(max_width)
+        needed_width = max([self.__min_width] + self._texts.values())
+        if width < needed_width:
+            self.set_fixed_width(needed_width)
+            self.set_min_width(needed_width)
+        elif width - needed_width >= self._single_char_width:
+            self.set_fixed_width(needed_width)
+            self.set_max_width(needed_width)
 
     def _recalc_width(self, path, text):
         self._texts[path[0]] = text
@@ -304,13 +314,13 @@ class LengthColumn(NumericColumn):
 
     def _get_min_width(self):
         # 1:22:22, allows entire albums as files (< 75mins)
-        return self._cell_width(util.format_time(60 * 82 + 22))
+        return self._cell_width(util.format_time_display(60 * 82 + 22))
 
     def _cdf(self, column, cell, model, iter_, user_data):
         value = model.get_value(iter_).get("~#length", 0)
         if not self._needs_update(value):
             return
-        text = util.format_time(value)
+        text = util.format_time_display(value)
         cell.set_property('text', text)
         self._recalc_width(model.get_path(iter_), text)
 

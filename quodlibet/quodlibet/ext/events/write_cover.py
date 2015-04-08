@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig
 #
 # This program is free software; you can redistribute it and/or modify
@@ -9,33 +10,36 @@ import shutil
 
 from gi.repository import Gtk
 
+from quodlibet import app
 from quodlibet import config
 from quodlibet.const import USERDIR
 from quodlibet.plugins.events import EventPlugin
 
-try:
-    config.get("plugins", __name__)
-except:
+
+def get_path():
     out = os.path.join(USERDIR, "current.cover")
-    config.set("plugins", __name__, out)
+    return config.get("plugins", __name__, out)
+
+
+def set_path(value):
+    config.set("plugins", __name__, value)
 
 
 class PictureSaver(EventPlugin):
     PLUGIN_ID = "Picture Saver"
     PLUGIN_NAME = _("Picture Saver")
-    PLUGIN_DESC = "The cover image of the current song is saved to a file."
+    PLUGIN_DESC = _("Saves the cover image of the current song to a file.")
     PLUGIN_ICON = Gtk.STOCK_SAVE
-    PLUGIN_VERSION = "0.21"
 
     def plugin_on_song_started(self, song):
-        outfile = config.get("plugins", __name__)
+        outfile = get_path()
         if song is None:
             try:
                 os.unlink(outfile)
             except EnvironmentError:
                 pass
         else:
-            cover = song.find_cover()
+            cover = app.cover_manager.get_cover(song)
             if cover is None:
                 try:
                     os.unlink(outfile)
@@ -50,17 +54,17 @@ class PictureSaver(EventPlugin):
         def changed(entry):
             fn = entry.get_text()
             try:
-                shutil.move(config.get("plugins", __name__), fn)
+                shutil.move(get_path(), fn)
             except EnvironmentError:
                 pass
             else:
-                config.set("plugins", __name__, fn)
+                set_path(fn)
 
         hb = Gtk.HBox(spacing=6)
         hb.set_border_width(6)
-        hb.pack_start(Gtk.Label(_("File:")), True, True, 0)
+        hb.pack_start(Gtk.Label(label=_("File:")), False, True, 0)
         e = Gtk.Entry()
-        e.set_text(config.get("plugins", __name__))
+        e.set_text(get_path())
         e.connect('changed', changed)
         hb.pack_start(e, True, True, 0)
         return hb

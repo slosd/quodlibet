@@ -16,15 +16,18 @@ from quodlibet import config
 class EmbedCover(CoverSourcePlugin):
     PLUGIN_ID = "embed-cover"
     PLUGIN_NAME = _("Embed cover")
-    PLUGIN_DESC = _("Use covers embed into audio files")
-    PLUGIN_VERSION = "1.0"
+    PLUGIN_DESC = _("Uses covers embedded into audio files.")
+
+    embedded = True
+
+    @classmethod
+    def group_by(cls, song):
+        # one group per song
+        return song.key
 
     @staticmethod
     def priority():
-        if config.getboolean("albumart", "prefer_embedded", False):
-            return 0.99
-        else:
-            return 0.7001
+        return 0.7001
 
     @property
     def cover(self):
@@ -36,9 +39,8 @@ class EmbedCover(CoverSourcePlugin):
 class FilesystemCover(CoverSourcePlugin):
     PLUGIN_ID = "filesystem-cover"
     PLUGIN_NAME = _("Filesystem cover")
-    PLUGIN_DESC = _("Use commonly named images found in common directories " +
-                    "alongside the song")
-    PLUGIN_VERSION = "1.0"
+    PLUGIN_DESC = _("Uses commonly named images found in common directories " +
+                    "alongside the song.")
 
     cover_subdirs = frozenset(
         ["scan", "scans", "images", "covers", "artwork"])
@@ -52,6 +54,11 @@ class FilesystemCover(CoverSourcePlugin):
     cover_negative_regexes = frozenset(
         map(lambda s: re.compile(r'(\b|_|)' + s + r'(\b|_)'),
             ["back", "inlay", "inset", "inside"]))
+
+    @classmethod
+    def group_by(cls, song):
+        # in the common case this means we only search once per album
+        return (song('~dirname'), song.album_key)
 
     @staticmethod
     def priority():

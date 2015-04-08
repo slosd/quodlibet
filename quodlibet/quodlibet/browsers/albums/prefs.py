@@ -15,10 +15,10 @@ from quodlibet import qltk
 from quodlibet import util
 from quodlibet.formats import PEOPLE
 
-from quodlibet.util import gobject_weak, format_rating
+from quodlibet.util import format_rating, connect_obj
 from quodlibet.qltk.ccb import ConfigCheckButton
 from quodlibet.qltk.textedit import PatternEditBox
-from quodlibet.parse import XMLFromMarkupPattern
+from quodlibet.pattern import XMLFromMarkupPattern
 
 
 EMPTY = _("Songs not in an album")
@@ -57,7 +57,7 @@ class Preferences(qltk.UniqueWindow):
 
     _EXAMPLE_ALBUM = FakeAlbum({
         "date": "2010-10-31",
-        "~length": util.format_time(6319),
+        "~length": util.format_time_display(6319),
         "~long-length": util.format_time_long(6319),
         "~tracks": ngettext("%d track", "%d tracks", 5) % 5,
         "~discs": ngettext("%d disc", "%d discs", 2) % 2,
@@ -81,8 +81,7 @@ class Preferences(qltk.UniqueWindow):
         cb = ConfigCheckButton(
             _("Show album _covers"), "browsers", "album_covers")
         cb.set_active(config.getboolean("browsers", "album_covers"))
-        gobject_weak(cb.connect, 'toggled',
-                     lambda s: browser.toggle_covers())
+        cb.connect('toggled', lambda s: browser.toggle_covers())
         vbox.pack_start(cb, False, True, 0)
 
         cb = ConfigCheckButton(
@@ -103,10 +102,9 @@ class Preferences(qltk.UniqueWindow):
 
         edit = PatternEditBox(PATTERN)
         edit.text = browser._pattern_text
-        gobject_weak(edit.apply.connect, 'clicked',
-                     self.__set_pattern, edit, browser)
-        gobject_weak(edit.buffer.connect_object, 'changed',
-                     self.__preview_pattern, edit, label, parent=edit)
+        edit.apply.connect('clicked', self.__set_pattern, edit, browser)
+        connect_obj(
+            edit.buffer, 'changed', self.__preview_pattern, edit, label)
 
         vbox.pack_start(eb, False, True, 3)
         vbox.pack_start(edit, True, True, 0)
@@ -122,7 +120,10 @@ class Preferences(qltk.UniqueWindow):
         b.pack_start(close, True, True, 0)
 
         main_box.pack_start(box, True, True, 0)
-        main_box.pack_start(b, False, True, 0)
+        self.use_header_bar()
+
+        if not self.has_close_button():
+            main_box.pack_start(b, False, True, 0)
         self.add(main_box)
 
         close.grab_focus()

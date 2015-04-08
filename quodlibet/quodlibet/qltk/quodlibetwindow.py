@@ -8,7 +8,7 @@
 
 import os
 
-from gi.repository import Gtk, GObject, Gdk, GLib, Gio
+from gi.repository import Gtk, Gdk, GLib, Gio
 
 import quodlibet
 
@@ -21,7 +21,7 @@ from quodlibet import util
 from quodlibet import app
 
 from quodlibet.formats.remote import RemoteFile
-from quodlibet.qltk.browser import LibraryBrowser
+from quodlibet.qltk.browser import LibraryBrowser, FilterMenu
 from quodlibet.qltk.chooser import FolderChooser, FileChooser
 from quodlibet.qltk.controls import PlayControls
 from quodlibet.qltk.cover import CoverImage
@@ -29,24 +29,25 @@ from quodlibet.qltk.getstring import GetStringDialog
 from quodlibet.qltk.bookmarks import EditBookmarks
 from quodlibet.qltk.info import SongInfo
 from quodlibet.qltk.information import Information
-from quodlibet.qltk.logging import LoggingWindow
-from quodlibet.qltk.msg import ErrorMessage
+from quodlibet.qltk.msg import ErrorMessage, WarningMessage
 from quodlibet.qltk.notif import StatusBar, TaskController
 from quodlibet.qltk.playorder import PlayOrder
 from quodlibet.qltk.pluginwin import PluginWindow
 from quodlibet.qltk.properties import SongProperties
 from quodlibet.qltk.prefs import PreferencesWindow
 from quodlibet.qltk.queue import QueueExpander
-from quodlibet.qltk.songlist import SongList
+from quodlibet.qltk.songlist import SongList, get_columns, set_columns
 from quodlibet.qltk.songmodel import PlaylistMux
-from quodlibet.qltk.x import RPaned, ConfigRVPaned, Alignment, ScrolledWindow
-from quodlibet.qltk.x import SymbolicIconImage
+from quodlibet.qltk.x import ConfigRVPaned, Align, ScrolledWindow
+from quodlibet.qltk.x import SymbolicIconImage, Button
 from quodlibet.qltk.about import AboutQuodLibet
-from quodlibet.util import copool, gobject_weak
+from quodlibet.util import copool, connect_destroy, connect_after_destroy
 from quodlibet.util.library import get_scan_dirs, set_scan_dirs
 from quodlibet.util.uri import URI
+from quodlibet.util import connect_obj
+from quodlibet.util.path import glib2fsnative
 from quodlibet.util.library import background_filter, scan_library
-from quodlibet.qltk.window import PersistentWindowMixin
+from quodlibet.qltk.window import PersistentWindowMixin, Window
 from quodlibet.qltk.songlistcolumns import SongListColumn
 
 
@@ -106,14 +107,13 @@ class MainSongList(SongList):
         super(MainSongList, self).__init__(library, player, update=True)
         self.set_first_column_type(CurrentColumn)
 
-        self.connect_object('row-activated', self.__select_song, player)
+        self.connect('row-activated', self.__select_song, player)
 
         # ugly.. so the main window knows if the next song-started
         # comes from an row-activated or anything else.
         def reset_activated(*args):
             self._activated = False
-        s = player.connect_after('song-started', reset_activated)
-        self.connect_object('destroy', player.disconnect, s)
+        connect_after_destroy(player, 'song-started', reset_activated)
 
         self.connect("orders-changed", self.__orders_changed)
 
@@ -123,10 +123,10 @@ class MainSongList(SongList):
             l.append("%d%s" % (int(reverse), tag))
         config.setstringlist('memory', 'sortby', l)
 
-    def __select_song(self, player, indices, col):
+    def __select_song(self, widget, indices, col, player):
         self._activated = True
         iter = self.model.get_iter(indices)
-        if player.go_to(iter, True):
+        if player.go_to(iter, explicit=True, source=self.model):
             player.paused = False
 
 
@@ -135,9 +135,9 @@ class SongListScroller(ScrolledWindow):
         super(SongListScroller, self).__init__()
         self.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self.set_shadow_type(Gtk.ShadowType.IN)
-        self.connect_object('notify::visible', self.__visibility, menu)
+        self.connect('notify::visible', self.__visibility, menu)
 
-    def __visibility(self, menu, event):
+    def __visibility(self, widget, event, menu):
         value = self.get_property('visible')
         menu.set_active(value)
         config.set("memory", "songlist", str(value))
@@ -161,18 +161,25 @@ class TopBar(Gtk.Toolbar):
         info_item.set_expand(True)
 
         box = Gtk.Box(spacing=6)
-        info_item.add(Alignment(box, border=3, right=-3))
+        info_item.add(box)
+        qltk.add_css(self, "GtkToolbar {padding: 3px;}")
 
         # song text
-        text = SongInfo(library.librarian, player)
-        box.pack_start(Alignment(text, top=3, bottom=3), True, True, 0)
+        info_pattern_path = os.path.join(const.USERDIR, "songinfo")
+        text = SongInfo(library.librarian, player, info_pattern_path)
+        box.pack_start(Align(text, border=3), True, True, 0)
 
         # cover image
         self.image = CoverImage(resize=True)
-        gobject_weak(player.connect, 'song-started', self.__new_song,
-                     parent=self)
-        gobject_weak(parent.connect, 'artwork-changed',
-                     self.__song_art_changed, library, parent=self)
+        connect_destroy(player, 'song-started', self.__new_song)
+
+        # FIXME: makes testing easier
+        if app.cover_manager:
+            connect_destroy(
+                app.cover_manager, 'cover-changed',
+                self.__song_art_changed, library)
+
+        self.image.props.margin = 2
         box.pack_start(self.image, False, True, 0)
 
         for child in self.get_children():
@@ -307,6 +314,15 @@ class AppMenu(object):
         am_object_path = "/net/sacredchao/QuodLibet/menus/appmenu"
         app_id = "net.sacredchao.QuodLibet"
 
+        win = window.get_window()
+        if not hasattr(win, "set_utf8_property"):
+            # not a GdkX11.X11Window
+            print_d("Registering appmenu failed: X11 only")
+            return
+
+        # FIXME: this doesn't fail on Windows but takes for ages.
+        # Maybe remove some deps to make it fail fast?
+        # We don't need dbus anyway there.
         try:
             bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
             self._ag_id = bus.export_action_group(ag_object_path, action_group)
@@ -316,12 +332,6 @@ class AppMenu(object):
             return
 
         self._bus = bus
-
-        win = window.get_window()
-        if not hasattr(win, "set_utf8_property"):
-            # not a GdkX11.X11Window
-            print_d("Registering appmenu failed: X11 only")
-            return
 
         win.set_utf8_property("_GTK_UNIQUE_BUS_NAME", bus.get_unique_name())
         win.set_utf8_property("_GTK_APPLICATION_ID", app_id)
@@ -348,19 +358,94 @@ class PlaybackErrorDialog(ErrorMessage):
             parent, _("Playback Error"), description)
 
 
+class ConfirmLibDirSetup(WarningMessage):
+
+    RESPONSE_SETUP = 1
+
+    def __init__(self, parent):
+        title = _("Set up library directories?")
+        description = _("You don't have any music library set up. "
+                        "Would you like to do that now?")
+
+        super(ConfirmLibDirSetup, self).__init__(
+            parent, title, description, buttons=Gtk.ButtonsType.NONE)
+
+        cancel_button = Button(_("_Not Now"), Gtk.STOCK_CANCEL)
+        cancel_button.show()
+        self.add_action_widget(cancel_button, Gtk.ResponseType.CANCEL)
+        save_button = Gtk.Button(label=_("_Set Up"), use_underline=True)
+        save_button.show()
+        self.add_action_widget(save_button, self.RESPONSE_SETUP)
+        self.set_default_response(Gtk.ResponseType.CANCEL)
+
+
+MAIN_MENU = """
+<ui>
+  <menubar name='Menu'>
+    <menu action='Music'>
+      <menuitem action='AddFolders' always-show-image='true'/>
+      <menuitem action='AddFiles' always-show-image='true'/>
+      <menuitem action='AddLocation' always-show-image='true'/>
+      <separator/>
+      <menu action='BrowseLibrary' always-show-image='true'>
+      %(browsers)s
+      </menu>
+      <separator/>
+      <menuitem action='Preferences' always-show-image='true'/>
+      <menuitem action='Plugins' always-show-image='true'/>
+      <separator/>
+      <menuitem action='RefreshLibrary' always-show-image='true'/>
+      <separator/>
+      <menuitem action='Quit' always-show-image='true'/>
+    </menu>
+  </menubar>
+</ui>
+"""
+
+
+MENU = """
+<ui>
+  <menubar name='Menu'>
+    <menu action='Control'>
+      <menuitem action='Previous' always-show-image='true'/>
+      <menuitem action='PlayPause' always-show-image='true'/>
+      <menuitem action='Next' always-show-image='true'/>
+      <menuitem action='StopAfter' always-show-image='true'/>
+      <separator/>
+      <menuitem action='AddBookmark' always-show-image='true'/>
+      <menuitem action='EditBookmarks' always-show-image='true'/>
+      <separator/>
+      <menuitem action='EditTags' always-show-image='true'/>
+      <menuitem action='Information' always-show-image='true'/>
+      <separator/>
+      <menuitem action='Jump' always-show-image='true'/>
+    </menu>
+    <menu action='View'>
+      <menuitem action='SongList' always-show-image='true'/>
+      <menuitem action='Queue' always-show-image='true'/>
+      <separator/>
+      %(views)s
+    </menu>
+    <menu action='Help'>
+      <menuitem action='OnlineHelp' always-show-image='true'/>
+      <menuitem action='SearchHelp' always-show-image='true'/>
+      <menuitem action='About' always-show-image='true'/>
+    </menu>
+  </menubar>
+</ui>
+"""
+
+
 DND_URI_LIST, = range(1)
 
 
-class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
-    SIG_PYOBJECT = (GObject.SignalFlags.RUN_LAST, None, (object,))
-    __gsignals__ = {
-        'artwork-changed': SIG_PYOBJECT,
-    }
+class QuodLibetWindow(Window, PersistentWindowMixin):
 
-    def __init__(self, library, player, headless=False):
-        super(QuodLibetWindow, self).__init__()
+    def __init__(self, library, player, headless=False, restore_cb=None):
+        super(QuodLibetWindow, self).__init__(dialog=False)
         self.last_dir = const.HOME
 
+        self.__destroyed = False
         self.__update_title(player)
         self.set_default_size(550, 450)
 
@@ -373,20 +458,38 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         accel_group = ui.get_accel_group()
         self.add_accel_group(accel_group)
 
+        def scroll_and_jump(*args):
+            self.__jump_to_current(True, True)
+
+        keyval, mod = Gtk.accelerator_parse("<control><shift>J")
+        accel_group.connect(keyval, mod, 0, scroll_and_jump)
+
         # dbus app menu
         AppMenu(self, ui.get_action_groups()[0])
 
+        # custom accel map
         accel_fn = os.path.join(const.USERDIR, "accels")
         Gtk.AccelMap.load(accel_fn)
+        # save right away so we fill the file with example comments of all
+        # accels
+        Gtk.AccelMap.save(accel_fn)
 
-        def accel_save_cb(*args):
-            Gtk.AccelMap.save(accel_fn)
-        accel_group.connect_object('accel-changed', accel_save_cb, None)
-        main_box.pack_start(ui.get_widget("/Menu"), False, True, 0)
+        menubar = ui.get_widget("/Menu")
+
+        # Since https://git.gnome.org/browse/gtk+/commit/?id=b44df22895c79
+        # toplevel menu items show an empty 16x16 image. While we don't
+        # need image items there UIManager creates them by default.
+        # Work around by removing the empty GtkImages
+        for child in menubar.get_children():
+            if isinstance(child, Gtk.ImageMenuItem):
+                child.set_image(None)
+
+        main_box.pack_start(menubar, False, True, 0)
 
         # get the playlist up before other stuff
         self.songlist = MainSongList(library, player)
         self.songlist.show_all()
+        self.songlist.connect("key-press-event", self.__songlist_key_press)
         self.songlist.connect_after(
             'drag-data-received', self.__songlist_drag_data_recv)
         self.song_scroller = SongListScroller(
@@ -401,7 +504,7 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         main_box.pack_start(top_bar, False, True, 0)
         self.top_bar = top_bar
 
-        self.__browserbox = Alignment(bottom=3)
+        self.__browserbox = Align(bottom=3)
         main_box.pack_start(self.__browserbox, True, True, 0)
 
         statusbox = StatusBarBox(self.songlist.model, player)
@@ -410,7 +513,7 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         self.statusbar = statusbox.statusbar
 
         main_box.pack_start(
-            Alignment(statusbox, border=3, top=-3, right=6),
+            Align(statusbox, border=3, top=-3, right=3),
             False, True, 0)
 
         self.songpane = ConfigRVPaned("memory", "queue_position", 0.75)
@@ -454,24 +557,32 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
 
         main_box.show_all()
 
+        self._playback_error_dialog = None
+        connect_destroy(player, 'song-started', self.__song_started)
+        connect_destroy(player, 'paused', self.__update_paused, True)
+        connect_destroy(player, 'unpaused', self.__update_paused, False)
+        # make sure we redraw all error indicators before opening
+        # a dialog (blocking the main loop), so connect after default handlers
+        connect_after_destroy(player, 'error', self.__player_error)
+        # connect after to let SongTracker update stats
+        connect_after_destroy(player, "song-ended", self.__song_ended)
+
+        # set at least the playlist. the song should be restored
+        # after the browser emits the song list
+        player.setup(self.playlist, None, 0)
+        self.__restore_cb = restore_cb
+        self.__first_browser_set = True
+
+        restore_browser = not headless
         try:
             self.select_browser(
-                self, config.get("memory", "browser"), library, player, True)
+                self, config.get("memory", "browser"), library, player,
+                restore_browser)
         except:
             config.set("memory", "browser", browsers.name(0))
             config.save(const.CONFIG)
             raise
 
-        # set at least the playlist before the mainloop starts..
-        player.setup(self.playlist, None, 0)
-
-        def delayed_song_set():
-            self.__delayed_setup = None
-            song = library.get(config.get("memory", "song"))
-            seek_pos = config.getint("memory", "seek", 0)
-            config.set("memory", "seek", 0)
-            player.setup(self.playlist, song, seek_pos)
-        self.__delayed_setup = GLib.idle_add(delayed_song_set)
         self.showhide_playlist(ui.get_widget("/Menu/View/SongList"))
         self.showhide_playqueue(ui.get_widget("/Menu/View/Queue"))
 
@@ -481,27 +592,7 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         self.songlist.info.connect("changed", self.__set_time)
 
         lib = library.librarian
-        gobject_weak(lib.connect_object, 'changed', self.__song_changed,
-                     player, parent=self)
-
-        self._playback_error_dialog = None
-        player_sigs = [
-            ('song-started', self.__song_started),
-            ('paused', self.__update_paused, True),
-            ('unpaused', self.__update_paused, False),
-        ]
-        for sig in player_sigs:
-            gobject_weak(player.connect, *sig, **{"parent": self})
-
-        # make sure we redraw all error indicators before opening
-        # a dialog (blocking the main loop), so connect after default handlers
-        gobject_weak(player.connect_after, 'error',
-                     self.__player_error, **{"parent": self})
-
-        # connect after to let SongTracker update stats
-        player_sigs.append(
-            gobject_weak(player.connect_after, "song-ended",
-                         self.__song_ended, parent=self))
+        connect_destroy(lib, 'changed', self.__song_changed, player)
 
         targets = [("text/uri-list", Gtk.TargetFlags.OTHER_APP, DND_URI_LIST)]
         targets = [Gtk.TargetEntry.new(*t) for t in targets]
@@ -520,12 +611,29 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         elif config.getboolean('library', 'auto_update'):
             self.__library.start_watching()
 
-        self.connect_object("key-press-event", self.__key_pressed, player)
+        self.connect("key-press-event", self.__key_pressed, player)
 
-        self.connect("delete-event", self.__save_browser)
         self.connect("destroy", self.__destroy)
 
         self.enable_window_tracking("quodlibet")
+
+    def set_as_osx_window(self, osx_app):
+        assert osx_app
+
+        menu = self.ui.get_widget("/Menu")
+        menu.hide()
+        osx_app.set_menu_bar(menu)
+        # Reparent some items to the "Application" menu
+        item = self.ui.get_widget('/Menu/Help/About')
+        osx_app.insert_app_menu_item(item, 0)
+        osx_app.insert_app_menu_item(Gtk.SeparatorMenuItem(), 1)
+        item = self.ui.get_widget('/Menu/Music/Preferences')
+        osx_app.insert_app_menu_item(item, 2)
+        quit_item = self.ui.get_widget('/Menu/Music/Quit')
+        quit_item.hide()
+
+    def get_osx_is_persistent(self):
+        return True
 
     def __player_error(self, player, song, player_error):
         # it's modal, but mmkeys etc. can still trigger new ones
@@ -541,9 +649,9 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         if not get_scan_dirs() and not len(library) and \
                 quodlibet.is_first_session("quodlibet"):
             print_d("Couldn't find any scan dirs")
-            if qltk.ConfirmAction(self, _("Set up library directories?"),
-                   _("You don't have any music library set up. "
-                     "Would you like to do that now?")).run():
+
+            resp = ConfirmLibDirSetup(self).run()
+            if resp == ConfirmLibDirSetup.RESPONSE_SETUP:
                 prefs = PreferencesWindow(self)
                 prefs.set_page("library")
                 prefs.show()
@@ -562,7 +670,7 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             window = EditBookmarks(self, librarian, player)
             window.show()
 
-    def __key_pressed(self, player, event):
+    def __key_pressed(self, widget, event, player):
         if not player.song:
             return
 
@@ -581,8 +689,8 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             return True
 
     def __destroy(self, *args):
-        if self.__delayed_setup:
-            GLib.source_remove(self.__delayed_setup)
+        self.playlist.destroy()
+
         # The tray icon plugin tries to unhide QL because it gets disabled
         # on Ql exit. The window should stay hidden after destroy.
         self.show = lambda: None
@@ -619,28 +727,21 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         if error:
             ErrorMessage(
                 self, _("Unable to add songs"),
-                _("<b>%s</b> uses an unsupported protocol.") % uri).run()
+                _("%s uses an unsupported protocol.") % util.bold(uri)).run()
         else:
             if dirs:
                 copool.add(
                     self.__library.scan, dirs,
                     cofuncid="library", funcid="library")
 
+    def __songlist_key_press(self, songlist, event):
+        return self.browser.key_pressed(event)
+
     def __songlist_drag_data_recv(self, view, *args):
-        if callable(self.browser.reordered):
-            self.browser.reordered(view)
+        if self.browser.can_reorder:
+            songs = view.get_songs()
+            self.browser.reordered(songs)
         self.songlist.clear_sort()
-
-    def __save_browser(self, *args):
-        print_d("Saving active browser state")
-        try:
-            self.browser.save()
-        except NotImplementedError:
-            pass
-
-    def destroy(self, *args):
-        self.__save_browser()
-        super(QuodLibetWindow, self).destroy()
 
     def __show_or(self, widget, prop):
         ssv = self.song_scroller.get_property('visible')
@@ -668,35 +769,21 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
     def __create_menu(self, player, library):
         ag = Gtk.ActionGroup.new('QuodLibetWindowActions')
 
-        def logging_cb(*args):
-            window = LoggingWindow(self)
-            window.show()
-
         actions = [
             ('Music', None, _("_Music")),
-            ('AddFolders', Gtk.STOCK_ADD, _('_Add a Folder...'),
+            ('AddFolders', Gtk.STOCK_ADD, _(u'_Add a Folder…'),
              "<control>O", None, self.open_chooser),
-            ('AddFiles', Gtk.STOCK_ADD, _('_Add a File...'),
+            ('AddFiles', Gtk.STOCK_ADD, _(u'_Add a File…'),
              None, None, self.open_chooser),
-            ('AddLocation', Gtk.STOCK_ADD, _('_Add a Location...'),
+            ('AddLocation', Gtk.STOCK_ADD, _(u'_Add a Location…'),
              None, None, self.open_location),
             ('BrowseLibrary', Gtk.STOCK_FIND, _('Open _Browser'), ""),
             ("Preferences", Gtk.STOCK_PREFERENCES, None, None, None,
              self.__preferences),
             ("Plugins", Gtk.STOCK_EXECUTE, _("_Plugins"), None, None,
              self.__plugins),
-            ("Quit", Gtk.STOCK_QUIT, None, None, None, self.destroy),
-            ('Filters', None, _("_Filters")),
-
-            ("PlayedRecently", Gtk.STOCK_FIND, _("Recently _Played"),
-             "", None, self.__filter_menu_actions),
-            ("AddedRecently", Gtk.STOCK_FIND, _("Recently _Added"),
-             "", None, self.__filter_menu_actions),
-            ("TopRated", Gtk.STOCK_FIND, _("_Top 40"),
-             "", None, self.__filter_menu_actions),
-            ("All", Gtk.STOCK_FIND, _("All _Songs"),
-             "", None, self.__filter_menu_actions),
-
+            ("Quit", Gtk.STOCK_QUIT, None, None, None,
+             lambda *x: self.destroy()),
             ("Control", None, _("_Control")),
             ("EditTags", Gtk.STOCK_PROPERTIES, _("Edit _Tags"), "", None,
              self.__current_song_prop),
@@ -708,8 +795,6 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
 
             ("View", None, _("_View")),
             ("Help", None, _("_Help")),
-            ("OutputLog", Gtk.STOCK_EDIT, _("_Output Log"),
-             None, None, logging_cb),
             ]
 
         actions.append(("Previous", Gtk.STOCK_MEDIA_PREVIOUS, None,
@@ -732,51 +817,40 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
 
         act = Gtk.Action.new(
             "AddBookmark", _("Add Bookmark"), None, Gtk.STOCK_ADD)
-        act.connect_object('activate', self.__add_bookmark,
+        connect_obj(act, 'activate', self.__add_bookmark,
                            library.librarian, player)
         ag.add_action_with_accel(act, "<ctrl>D")
 
         act = Gtk.Action.new("EditBookmarks", _(u"Edit Bookmarks…"), None, "")
-        act.connect_object('activate', self.__edit_bookmarks,
+        connect_obj(act, 'activate', self.__edit_bookmarks,
                            library.librarian, player)
         ag.add_action_with_accel(act, "<ctrl>B")
 
         act = Gtk.Action.new("About", None, None, Gtk.STOCK_ABOUT)
-        act.connect_object('activate', self.__show_about, player)
+        connect_obj(act, 'activate', self.__show_about, player)
         ag.add_action_with_accel(act, None)
 
         act = Gtk.Action.new(
             "OnlineHelp", _("Online Help"), None, Gtk.STOCK_HELP)
-        act.connect_object('activate', util.website, const.ONLINE_HELP)
+
+        def website_handler(*args):
+            util.website(const.ONLINE_HELP)
+
+        act.connect('activate', website_handler)
         ag.add_action_with_accel(act, "F1")
 
         act = Gtk.Action.new("SearchHelp", _("Search Help"), None, "")
-        act.connect_object('activate', util.website, const.SEARCH_HELP)
+
+        def search_help_handler(*args):
+            util.website(const.SEARCH_HELP)
+
+        act.connect('activate', search_help_handler)
         ag.add_action_with_accel(act, None)
 
         act = Gtk.Action.new(
             "RefreshLibrary", _("Re_fresh Library"), None, Gtk.STOCK_REFRESH)
         act.connect('activate', self.__rebuild, False)
         ag.add_action_with_accel(act, None)
-
-        for tag_, lab in [
-            ("genre", _("Filter on _Genre")),
-            ("artist", _("Filter on _Artist")),
-            ("album", _("Filter on Al_bum"))]:
-            act = Gtk.Action.new(
-                "Filter%s" % util.capitalize(tag_), lab, None, Gtk.STOCK_INDEX)
-            act.connect_object('activate',
-                               self.__filter_on, tag_, None, player)
-            ag.add_action_with_accel(act, None)
-
-        for (tag_, accel, label) in [
-            ("genre", "G", _("Random _Genre")),
-            ("artist", "T", _("Random _Artist")),
-            ("album", "M", _("Random Al_bum"))]:
-            act = Gtk.Action.new("Random%s" % util.capitalize(tag_), label,
-                                 None, Gtk.STOCK_DIALOG_QUESTION)
-            act.connect('activate', self.__random, tag_)
-            ag.add_action_with_accel(act, "<control>" + accel)
 
         ag.add_toggle_actions([
             ("SongList", None, _("Song _List"), None, None,
@@ -807,20 +881,23 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             action = "Browser" + Kind.__name__
             label = Kind.accelerated_name
             act = Gtk.Action.new(action, label, None, None)
-            act.connect_object('activate', LibraryBrowser.open, Kind, library)
-            ag.add_action_with_accel(act, None)
 
-        debug_menu = ""
-        if const.DEBUG:
-            debug_menu = (
-                "<separator/>"
-                "<menuitem action='OutputLog' always-show-image='true'/>")
+            def browser_activate(action, Kind):
+                LibraryBrowser.open(Kind, library, player)
+
+            act.connect('activate', browser_activate, Kind)
+            ag.add_action_with_accel(act, None)
 
         ui = Gtk.UIManager()
         ui.insert_action_group(ag, -1)
-        menustr = const.MENU % {"browsers": browsers.BrowseLibrary(),
-                                "views": browsers.ViewBrowser(),
-                                "debug": debug_menu}
+
+        ui.add_ui_from_string(
+            MAIN_MENU % {"browsers": browsers.BrowseLibrary()})
+        self._filter_menu = FilterMenu(library, player, ui)
+
+        menustr = MENU % {
+            "views": browsers.ViewBrowser(),
+        }
         ui.add_ui_from_string(menustr)
 
         # Cute. So. UIManager lets you attach tooltips, but when they're
@@ -829,10 +906,6 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         ui.get_widget("/Menu/Music/RefreshLibrary").set_tooltip_text(
                 _("Check for changes in your library"))
 
-        ui.get_widget("/Menu/Filters/TopRated").set_tooltip_text(
-                _("The 40 songs you've played most (more than 40 may "
-                  "be chosen if there are ties)"))
-
         return ui
 
     def __show_about(self, player):
@@ -840,32 +913,32 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         about.run()
         about.destroy()
 
-    def __browser_configure(self, paned, event, browser):
-        if paned.get_property('position-set'):
-            key = "%s_pos" % browser.__class__.__name__
-            config.set("browsers", key, str(paned.get_relative()))
-
     def select_browser(self, activator, current, library, player,
                        restore=False):
         if isinstance(current, Gtk.RadioAction):
             current = current.get_current_value()
         Browser = browsers.get(current)
+
         config.set("memory", "browser", Browser.__name__)
         if self.browser:
+            if not (self.browser.uses_main_library and
+                    Browser.uses_main_library):
+                self.songlist.clear()
             container = self.browser.__container
             self.browser.unpack(container, self.songpane)
             if self.browser.accelerators:
                 self.remove_accel_group(self.browser.accelerators)
             container.destroy()
             self.browser.destroy()
-        self.browser = Browser(library, True)
-        self.browser.connect('songs-selected', self.__browser_cb)
-        self.browser.connect('activated', self.__browser_activate)
+        self.browser = Browser(library)
+        self.browser.connect('songs-selected',
+            self.__browser_cb, library, player)
+        self.browser.connect('songs-activated', self.__browser_activate)
         if restore:
             self.browser.restore()
             self.browser.activate()
         self.browser.finalize(restore)
-        if self.browser.reordered:
+        if self.browser.can_reorder:
             self.songlist.enable_drop()
         elif self.browser.dropped:
             self.songlist.enable_drop(False)
@@ -876,31 +949,11 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
 
         container = self.browser.__container = self.browser.pack(self.songpane)
 
-        # find a paned and save the position
-        paned = None
-        for widget in qltk.find_widgets(container, RPaned):
-            if widget is not self.songpane:
-                paned = widget
-                break
-
-        if paned:
-            try:
-                key = "%s_pos" % self.browser.__class__.__name__
-                val = config.getfloat("browsers", key)
-                # Use a minimum restore size
-                val = max(val, 0.1)
-            except:
-                val = 0.4
-            paned.connect(
-                'notify::position', self.__browser_configure, self.browser)
-
-            paned.set_relative(val)
-
         player.replaygain_profiles[1] = self.browser.replaygain_profiles
         player.volume = player.volume
         self.__browserbox.add(container)
         container.show()
-        self.__hide_menus()
+        self._filter_menu.set_browser(self.browser)
         self.__hide_headers()
         self.__refresh_size()
 
@@ -929,7 +982,7 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             player.paused = True
             self.stop_after.set_active(False)
 
-    def __song_changed(self, player, songs):
+    def __song_changed(self, library, songs, player):
         if player.info in songs:
             self.__update_title(player)
 
@@ -947,18 +1000,10 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
                     "EditBookmarks", "AddBookmark", "StopAfter"]:
             self.ui.get_widget(
                 '/Menu/Control/' + wid).set_sensitive(bool(song))
-        for wid in ["FilterAlbum", "FilterArtist", "FilterGenre"]:
-            self.ui.get_widget(
-                '/Menu/Filters/' + wid).set_sensitive(bool(song))
-        if song:
-            for h in ['genre', 'artist', 'album']:
-                self.ui.get_widget(
-                    "/Menu/Filters/Filter%s" % h.capitalize()).set_sensitive(
-                    h in song)
 
         # don't jump on stream changes (player.info != player.song)
         if song and player.song is song and not self.songlist._activated and \
-            config.getboolean("settings", "jump"):
+            config.getboolean("settings", "jump") and self.songlist.sourced:
             self.__jump_to_current(False)
 
     def __refresh_size(self):
@@ -996,13 +1041,15 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         else:
             app.player.paused ^= True
 
-    def __jump_to_current(self, explicit):
+    def __jump_to_current(self, explicit, force_scroll=False):
         """Select/scroll to the current playing song in the playlist.
         If it can't be found tell the browser to properly fill the playlist
         with an appropriate selection containing the song.
 
         explicit means that the jump request comes from the user and not
         from an event like song-started.
+
+        force_scroll will ask the browser to refill the playlist in any case.
         """
 
         def idle_jump_to(song, select):
@@ -1017,7 +1064,12 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
         if song is None:
             return
 
-        ok = self.songlist.jump_to_song(song, select=explicit)
+        if not force_scroll:
+            ok = self.songlist.jump_to_song(song, select=explicit)
+        else:
+            assert explicit
+            ok = False
+
         if ok:
             self.songlist.grab_focus()
         elif explicit:
@@ -1034,30 +1086,6 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
 
     def __previous_song(self, *args):
         app.player.previous()
-
-    def __random(self, item, key):
-        self.browser.filter_random(key)
-
-    def __filter_menu_actions(self, menuitem):
-        name = menuitem.get_name()
-
-        if name == "PlayedRecently":
-            self.__make_query("#(lastplayed < 7 days ago)")
-        elif name == "AddedRecently":
-            self.__make_query("#(added < 7 days ago)")
-        elif name == "TopRated":
-            bg = background_filter()
-            songs = (bg and filter(bg, self.__library)) or self.__library
-            songs = [song.get("~#playcount", 0) for song in songs]
-            if len(songs) == 0:
-                return
-            songs.sort()
-            if len(songs) < 40:
-                self.__make_query("#(playcount > %d)" % (songs[0] - 1))
-            else:
-                self.__make_query("#(playcount > %d)" % (songs[-40] - 1))
-        elif name == "All":
-            self.browser.unfilter()
 
     def __rebuild(self, activator, force):
         scan_library(self.__library, force)
@@ -1079,13 +1107,13 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             if not util.uri_is_valid(name):
                 ErrorMessage(
                     self, _("Unable to add location"),
-                    _("<b>%s</b> is not a valid location.") % (
-                    util.escape(name))).run()
+                    _("%s is not a valid location.") % (
+                    util.bold(util.escape(name)))).run()
             elif not app.player.can_play_uri(name):
                 ErrorMessage(
                     self, _("Unable to add location"),
-                    _("<b>%s</b> uses an unsupported protocol.") % (
-                    util.escape(name))).run()
+                    _("%s uses an unsupported protocol.") % (
+                    util.bold(util.escape(name)))).run()
             else:
                 if name not in self.__library:
                     self.__library.add([RemoteFile(name)])
@@ -1121,9 +1149,11 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             fns, do_watch = dialog.run()
             dialog.destroy()
             if fns:
+                fns = map(glib2fsnative, fns)
                 # scan them
                 self.last_dir = fns[0]
-                copool.add(self.__library.scan, fns, funcid="library")
+                copool.add(self.__library.scan, fns, cofuncid="library",
+                           funcid="library")
 
                 # add them as library scan directory
                 if do_watch:
@@ -1137,8 +1167,9 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             fns = dialog.run()
             dialog.destroy()
             if fns:
+                fns = map(glib2fsnative, fns)
                 self.last_dir = os.path.dirname(fns[0])
-                for filename in map(os.path.realpath, map(util.fsnative, fns)):
+                for filename in map(os.path.realpath, fns):
                     self.__library.add_filename(filename)
 
     def __songs_popup_menu(self, songlist):
@@ -1163,49 +1194,32 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             window = Information(librarian, [song], self)
             window.show()
 
-    def __hide_menus(self):
-        menus = {'genre': ["/Menu/Filters/FilterGenre",
-                           "/Menu/Filters/RandomGenre"],
-                 'artist': ["/Menu/Filters/FilterArtist",
-                           "/Menu/Filters/RandomArtist"],
-                 'album': ["/Menu/Filters/FilterAlbum",
-                           "/Menu/Filters/RandomAlbum"],
-                 None: ["/Menu/Filters/PlayedRecently",
-                        "/Menu/Filters/AddedRecently",
-                        "/Menu/Filters/TopRated",
-                        "/Menu/Filters/All"]}
-        for key, widgets in menus.items():
-            c = self.browser.can_filter(key)
-            for widget in widgets:
-                self.ui.get_widget(widget).set_property('visible', c)
-
     def __browser_activate(self, browser):
-        model = self.songlist.get_model()
-        model.reset()
-        if app.player.go_to(model.get_iter_first(), True):
-            app.player.paused = False
+        app.player.reset()
 
-    def __browser_cb(self, browser, songs, sorted):
+    def __browser_cb(self, browser, songs, sorted, library, player):
         if browser.background:
             bg = background_filter()
             if bg:
                 songs = filter(bg, songs)
         self.songlist.set_songs(songs, sorted)
 
-    def __filter_on(self, header, songs, player):
-        browser = self.browser
+        # After the first time the browser activates, which should always
+        # happen if we start up and restore, restore the playing song.
+        # Because the browser has send us songs we can be sure it has
+        # registered all its libraries.
+        if self.__first_browser_set:
+            self.__first_browser_set = False
 
-        if not browser:
-            return
+            song = library.librarian.get(config.get("memory", "song"))
+            seek_pos = config.getint("memory", "seek", 0)
+            config.set("memory", "seek", 0)
+            if song is not None:
+                player.setup(self.playlist, song, seek_pos)
 
-        # Fall back to the playing song
-        if songs is None:
-            if player.song:
-                songs = [player.song]
-            else:
-                return
-
-        browser.filter_on(songs, header)
+            if self.__restore_cb:
+                self.__restore_cb()
+                self.__restore_cb = None
 
     def __hide_headers(self, activator=None):
         for column in self.songlist.get_columns():
@@ -1225,9 +1239,9 @@ class QuodLibetWindow(Gtk.Window, PersistentWindowMixin):
             headers.remove('~current')
         except ValueError:
             pass
-        if len(headers) == len(config.get_columns()):
+        if len(headers) == len(get_columns()):
             # Not an addition or removal (handled separately)
-            config.set_columns(headers)
+            set_columns(headers)
             SongList.headers = headers
 
     def __make_query(self, query):

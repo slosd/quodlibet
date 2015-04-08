@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006 Joe Wreschnig
 #
 # This program is free software; you can redistribute it and/or modify
@@ -10,7 +11,7 @@ import locale
 
 from gi.repository import Gtk
 
-from quodlibet import util
+from quodlibet.const import FSCODING
 from quodlibet.plugins.editing import EditTagsPlugin
 
 ENCODINGS = """\
@@ -20,23 +21,22 @@ iso2022_kr iso8859_2 iso8859_3 iso8859_4 iso8859_5 iso8859_6 iso8859_7
 iso8859_8 iso8859_9 iso8859_10 iso8859_13 iso8859_14 iso8859_15 johab
 koi8_r koi8_u ptcp154 shift_jis utf_16_be utf_16_le""".split()
 
-if util.fscoding not in ENCODINGS + ["utf-8", "latin1"]:
-    ENCODINGS.append(util.fscoding)
+if FSCODING not in ENCODINGS + ["utf-8", "latin1"]:
+    ENCODINGS.append(FSCODING)
 if locale.getpreferredencoding() not in ENCODINGS + ["utf-8", "latin1"]:
-    ENCODINGS.append(util.fscoding)
+    ENCODINGS.append(FSCODING)
 
 
 class Iconv(EditTagsPlugin):
     PLUGIN_ID = "Convert Encodings"
     PLUGIN_NAME = _("Convert Encodings")
-    PLUGIN_DESC = _("Fix misinterpreted tag value encodings in the "
+    PLUGIN_DESC = _("Fixes misinterpreted tag value encodings in the "
                     "tag editor.")
     PLUGIN_ICON = Gtk.STOCK_CONVERT
-    PLUGIN_VERSION = "2"
 
     def __init__(self, tag, value):
         super(Iconv, self).__init__(
-            _("_Convert Encoding..."), use_underline=True)
+            _(u"_Convert Encoding…"), use_underline=True)
         self.set_image(
             Gtk.Image.new_from_stock(Gtk.STOCK_CONVERT, Gtk.IconSize.MENU))
         submenu = Gtk.Menu()

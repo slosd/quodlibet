@@ -13,14 +13,22 @@ from gi.repository import Gtk, Pango, Gdk, GdkPixbuf, GLib
 
 from quodlibet import browsers, config, qltk, util, app
 from quodlibet.config import RATINGS
-from quodlibet.parse import Pattern
+from quodlibet.pattern import Pattern
 from quodlibet.plugins.events import EventPlugin
 from quodlibet.qltk.browser import LibraryBrowser
 from quodlibet.qltk.information import Information
 from quodlibet.qltk.playorder import ORDERS
 from quodlibet.qltk.properties import SongProperties
+from quodlibet.qltk.window import Window
+from quodlibet.qltk.ccb import ConfigCheckButton
 from quodlibet.qltk.x import RadioMenuItem, SeparatorMenuItem
-from quodlibet.util.thumbnails import scale, calc_scale_size
+from quodlibet.qltk import icons
+from quodlibet.util.thumbnails import scale
+from quodlibet.util import connect_obj
+
+
+def get_hide_window():
+    return config.getboolean('plugins', 'trayicon_window_hide', True)
 
 
 class Preferences(Gtk.VBox):
@@ -30,6 +38,11 @@ class Preferences(Gtk.VBox):
         super(Preferences, self).__init__(spacing=12)
 
         self.set_border_width(6)
+
+        ccb = ConfigCheckButton(_("Hide main window on close"),
+                                'plugins', 'trayicon_window_hide')
+        ccb.set_active(get_hide_window())
+        self.pack_start(ccb, False, True, 0)
 
         combo = Gtk.ComboBoxText()
         combo.append_text(_("Scroll wheel adjusts volume\n"
@@ -44,7 +57,7 @@ class Preferences(Gtk.VBox):
                         True, True, 0)
 
         box = Gtk.VBox(spacing=12)
-        table = Gtk.Table(2, 4)
+        table = Gtk.Table(n_rows=2, n_columns=4)
         table.set_row_spacings(6)
         table.set_col_spacings(12)
 
@@ -52,7 +65,7 @@ class Preferences(Gtk.VBox):
         for i, tag in enumerate([
                 "genre", "artist", "album", "discnumber", "part",
                 "tracknumber", "title", "version"]):
-            cb = Gtk.CheckButton(util.tag(tag))
+            cb = Gtk.CheckButton(label=util.tag(tag))
             cb.tag = tag
             cbs.append(cb)
             table.attach(cb, i % 3, i % 3 + 1, i // 3, i // 3 + 1)
@@ -121,6 +134,77 @@ class Preferences(Gtk.VBox):
         config.set("plugins", "icon_tooltip", entry.get_text())
 
 
+def get_paused_pixbuf(boundary, diff):
+    """Returns a pixbuf for a paused icon from the current theme.
+    The returned pixbuf can have a size of size->size+diff
+
+    size needs to be > 0
+    """
+
+    size = min(boundary)
+
+    if size <= 0:
+        raise ValueError("size has to be > 0")
+
+    if diff < 0:
+        raise ValueError("diff has to be >= 0")
+
+    names = ('media-playback-pause', Gtk.STOCK_MEDIA_PAUSE)
+    theme = Gtk.IconTheme.get_default()
+
+    # Get the suggested icon
+    info = theme.choose_icon(names, size, Gtk.IconLookupFlags.USE_BUILTIN)
+    if not info:
+        return
+
+    try:
+        pixbuf = info.load_icon()
+    except GLib.GError:
+        pass
+    else:
+        # In case it is too big, rescale
+        pb_size = min(pixbuf.get_height(), pixbuf.get_width())
+        if abs(pb_size - size) > diff:
+            return scale(pixbuf, boundary)
+        return pixbuf
+
+
+def new_with_paused_emblem(icon_pixbuf):
+    """Returns a new pixbuf with a pause emblem in the right bottom corner
+
+    (success, new pixbuf)
+    """
+
+    padding = 1.0 / 15.0
+    size = 5.0 / 8.0
+
+    base = icon_pixbuf.copy()
+    w, h = base.get_width(), base.get_height()
+    hpad = int(h * padding)
+    wpad = int(w * padding)
+
+    # get the sqare area where we can place the icon
+    hn = int((w - wpad) * size)
+    wn = int((h - hpad) * size)
+    if hn <= 0 or wn <= 0:
+        return False, base
+
+    # get a pixbuf with roughly the size we want
+    overlay = get_paused_pixbuf((hn, wn), min(hn, wn) / 5)
+    if not overlay:
+        return False, base
+
+    wo, ho = overlay.get_width(), overlay.get_height()
+    # we expect below that the icon fits into the icon including padding
+    wo = min(w - wpad, wo)
+    ho = min(h - hpad, ho)
+    overlay.composite(base, w - wo - wpad, h - ho - hpad,
+                      wo, ho, w - wo - wpad, h - ho - hpad,
+                      1.0, 1.0, GdkPixbuf.InterpType.BILINEAR, 255)
+
+    return True, base
+
+
 class TrayIcon(EventPlugin):
     _icon = None
     __pixbuf = None
@@ -138,8 +222,7 @@ class TrayIcon(EventPlugin):
 
     PLUGIN_ID = "Tray Icon"
     PLUGIN_NAME = _("Tray Icon")
-    PLUGIN_DESC = _("Control Quod Libet from the system tray.")
-    PLUGIN_VERSION = "2.0"
+    PLUGIN_DESC = _("Controls Quod Libet from the system tray.")
 
     def enabled(self):
         self._icon = Gtk.StatusIcon()
@@ -148,71 +231,85 @@ class TrayIcon(EventPlugin):
             self.__theme_changed)
 
         self._icon.connect('size-changed', self.__size_changed)
-        # No size-changed under win32
-        if sys.platform == "win32":
-            self.__size = 16
-
+        self._icon.connect("notify::embedded", self.__embedded_changed)
+        self.__embedded_changed(self._icon)
         self._icon.connect('popup-menu', self._popup_menu)
         self._icon.connect('activate', self.__button_left)
 
         self._icon.connect('scroll-event', self.__scroll)
         self._icon.connect('button-press-event', self.__button_middle)
 
-        self.__w_sig_map = app.window.connect('map-event', self.__window_map)
+        self.__w_sig_show = app.window.connect('show', self.__window_show)
         self.__w_sig_del = app.window.connect('delete-event',
                                               self.__window_delete)
 
-        self.plugin_on_paused()
-        self.plugin_on_song_started(app.player.song)
+        # If after the main loop is idle and 3 seconds have passed
+        # the tray icon isn't embedded, assume it wont be and unhide
+        # all windows, so QL isn't 'lost'..
+
+        def add_timeout():
+            def check_embedded():
+                is_embedded = self._icon.is_embedded()
+                main_window_shown = app.window.get_visible()
+                if not is_embedded and not main_window_shown:
+                    app.present()
+                self.__emb_sig = None
+                return False
+
+            self.__emb_sig = GLib.timeout_add(3000, check_embedded)
+            return False
+
+        self.__emb_sig = GLib.idle_add(add_timeout)
+
+        if sys.platform != "darwin":
+            if not config.getboolean("plugins", "icon_window_visible", True):
+                Window.prevent_inital_show(True)
+
+    def __embedded_changed(self, icon, *args):
+        if icon.get_property("embedded"):
+            size = icon.get_size()
+            self.__size_changed(icon, size)
 
     def disabled(self):
+        if self.__menu:
+            self.__menu.destroy()
+            self.__menu = None
+        if self.__emb_sig:
+            GLib.source_remove(self.__emb_sig)
+            self.__emb_sig = None
         self.__icon_theme.disconnect(self.__theme_sig)
         self.__icon_theme = None
-        app.window.disconnect(self.__w_sig_map)
+        app.window.disconnect(self.__w_sig_show)
         app.window.disconnect(self.__w_sig_del)
         self._icon.set_visible(False)
-        try:
-            self._icon.destroy()
-        except AttributeError:
-            pass
         self._icon = None
         self.__show_window()
+
+    def __user_can_unhide(self):
+        """Return if the user has the possibility to show the Window somehow"""
+
+        if sys.platform == "darwin":
+            return False
+
+        # Either if it's embedded, or if we are waiting for the embedded check
+        return bool(self._icon.is_embedded() or self.__emb_sig)
 
     def PluginPreferences(self, parent):
         p = Preferences(self)
         p.connect('destroy', self.__prefs_destroy)
         return p
 
-    def __get_paused_pixbuf(self, size, diff):
-        """Returns a pixbuf for a paused icon from the current theme.
-        The returned pixbuf can have a size of size->size+diff"""
-
-        names = ('media-playback-pause', Gtk.STOCK_MEDIA_PAUSE)
-        theme = Gtk.IconTheme.get_default()
-
-        # Get the suggested icon
-        info = theme.choose_icon(names, size, Gtk.IconLookupFlags.USE_BUILTIN)
-        if not info:
-            return
-
-        try:
-            pixbuf = info.load_icon()
-        except GLib.GError:
-            pass
-        else:
-            # In case it is too big, rescale
-            if pixbuf.get_height() - size > diff:
-                return scale(pixbuf, (size,) * 2)
-            return pixbuf
-
     def __update_icon(self):
         if self.__size <= 0:
             return
 
         if not self.__pixbuf:
+            flags = 0
+            if sys.platform == "win32":
+                flags = Gtk.IconLookupFlags.FORCE_SIZE
             try:
                 self.__pixbuf = self.__icon_theme.load_icon(
-                    "quodlibet", self.__size, 0)
+                    icons.QUODLIBET, self.__size, flags)
             except GLib.GError:
                 util.print_exc()
                 return
@@ -228,26 +325,7 @@ class TrayIcon(EventPlugin):
             self.__pixbuf = bg
 
         if app.player.paused and not self.__pixbuf_paused:
-            base = self.__pixbuf.copy()
-            w, h = base.get_width(), base.get_height()
-            pad = h / 15
-
-            # get the area where we can place the icon
-            wn, hn = calc_scale_size((w - pad, 5 * (h - pad) / 8), (1, 1))
-
-            # get a pixbuf with roughly the size we want
-            diff = (h - hn - pad) / 3
-            overlay = self.__get_paused_pixbuf(hn, diff)
-
-            if overlay:
-                wo, ho = overlay.get_width(), overlay.get_height()
-
-                overlay.composite(base, w - wo - pad, h - ho - pad,
-                                  wo, ho, w - wo - pad, h - ho - pad,
-                                  1, 1,
-                                  GdkPixbuf.InterpType.BILINEAR, 255)
-
-            self.__pixbuf_paused = base
+            self.__pixbuf_paused = new_with_paused_emblem(self.__pixbuf)[1]
 
         if app.player.paused:
             new_pixbuf = self.__pixbuf_paused
@@ -261,36 +339,37 @@ class TrayIcon(EventPlugin):
         self.__pixbuf_paused = None
         self.__update_icon()
 
-    def __size_changed(self, icon, size, *args):
+    def __size_changed(self, icon, req_size, *args):
+        # https://bugzilla.gnome.org/show_bug.cgi?id=733647
+        # Workaround: if size < 16, create a 16px pixbuf anyway and return that
+        # we didn't set the right size
+
+        size = max(req_size, 16)
         if size != self.__size:
             self.__pixbuf = None
             self.__pixbuf_paused = None
 
             self.__size = size
             self.__update_icon()
-        return True
+
+        return size == req_size and self.__pixbuf is not None
 
     def __prefs_destroy(self, *args):
         if self._icon:
             self.plugin_on_song_started(app.player.song)
 
     def __window_delete(self, win, event):
-        return self.__hide_window()
+        if self.__user_can_unhide() and get_hide_window():
+            self.__hide_window()
+            return True
+        return False
 
-    def __window_map(self, win, *args):
-        visible = config.getboolean("plugins", "icon_window_visible", False)
-
+    def __window_show(self, win, *args):
         config.set("plugins", "icon_window_visible", "true")
 
-        # Only restore window state on start
-        if not visible and self.__first_map:
-            self.__hide_window()
-
     def __hide_window(self):
-        self.__first_map = False
         app.hide()
         config.set("plugins", "icon_window_visible", "false")
-        return True
 
     def __show_window(self):
         app.present()
@@ -303,11 +382,16 @@ class TrayIcon(EventPlugin):
         else:
             self.__show_window()
 
-    def __button_middle(self, widget, event):
+    def __button_middle(self, widget, event, _last_timestamp=[0]):
         if event.type == Gdk.EventType.BUTTON_PRESS and \
                 event.button == Gdk.BUTTON_MIDDLE:
             if self.__destroy_win32_menu():
                 return
+            # work around gnome shell (3.14) bug, it sends middle clicks twice
+            # with the same timestamp, so ignore the second event
+            if event.time == _last_timestamp[0]:
+                return
+            _last_timestamp[0] = event.time
             self.__play_pause()
 
     def __play_pause(self, *args):
@@ -358,7 +442,7 @@ class TrayIcon(EventPlugin):
 
     def __destroy_win32_menu(self):
         """Returns True if current action should only hide the menu"""
-        if sys.platform == "win32" and self.__menu:
+        if sys.platform in ("win32", "darwin") and self.__menu:
             self.__menu.destroy()
             self.__menu = None
             return True
@@ -432,8 +516,8 @@ class TrayIcon(EventPlugin):
             if not Kind.in_menu:
                 continue
             i = Gtk.MenuItem(label=Kind.accelerated_name, use_underline=True)
-            i.connect_object(
-                'activate', LibraryBrowser.open, Kind, app.library)
+            connect_obj(i,
+                'activate', LibraryBrowser.open, Kind, app.library, app.player)
             browse_sub.append(i)
 
         browse.set_submenu(browse_sub)
@@ -455,8 +539,8 @@ class TrayIcon(EventPlugin):
         rating = Gtk.MenuItem(label=_("_Rating"), use_underline=True)
         rating_sub = Gtk.Menu()
         for r in RATINGS.all:
-            item = Gtk.MenuItem("%0.2f\t%s" % (r, util.format_rating(r)))
-            item.connect_object('activate', set_rating, r)
+            item = Gtk.MenuItem(label="%0.2f\t%s" % (r, util.format_rating(r)))
+            connect_obj(item, 'activate', set_rating, r)
             rating_sub.append(item)
         rating.set_submenu(rating_sub)
 
@@ -479,11 +563,11 @@ class TrayIcon(EventPlugin):
 
         menu.show_all()
 
-        if sys.platform != "win32":
+        if sys.platform in ("win32", "darwin"):
+            pos_func = pos_arg = None
+        else:
             pos_func = Gtk.StatusIcon.position_menu
             pos_arg = self._icon
-        else:
-            pos_func = pos_arg = None
 
         menu.popup(None, None, pos_func, pos_arg, button, time)
 

@@ -14,12 +14,15 @@ from quodlibet import util
 
 from quodlibet.plugins import PluginManager
 from quodlibet.qltk.views import HintedTreeView
+from quodlibet.qltk.window import UniqueWindow
 from quodlibet.qltk.entry import ClearEntry
-from quodlibet.qltk.x import Alignment
+from quodlibet.qltk.x import Align, Paned, Button
 from quodlibet.qltk.models import ObjectStore, ObjectModelFilter
+from quodlibet.qltk import icons
+from quodlibet.util import connect_obj
 
 
-class PluginErrorWindow(qltk.UniqueWindow):
+class PluginErrorWindow(UniqueWindow):
     def __init__(self, parent, failures):
         if self.is_not_unique():
             return
@@ -56,18 +59,22 @@ class PluginErrorWindow(qltk.UniqueWindow):
             vbox.pack_start(expander, False, True, 0)
             expander.add(failure)
 
-        vbox2 = Gtk.VBox(spacing=12)
-        close = Gtk.Button(stock=Gtk.STOCK_CLOSE)
-        close.connect('clicked', lambda *x: self.destroy())
-        b = Gtk.HButtonBox()
-        b.set_layout(Gtk.ButtonBoxStyle.END)
-        b.pack_start(close, True, True, 0)
+        self.use_header_bar()
 
-        vbox2.pack_start(scrolledwin, True, True, 0)
-        vbox2.pack_start(b, False, True, 0)
-        self.add(vbox2)
+        if not self.has_close_button():
+            vbox2 = Gtk.VBox(spacing=12)
+            close = Button(_("_Close"), icons.WINDOW_CLOSE)
+            close.connect('clicked', lambda *x: self.destroy())
+            b = Gtk.HButtonBox()
+            b.set_layout(Gtk.ButtonBoxStyle.END)
+            b.pack_start(close, True, True, 0)
+            vbox2.pack_start(scrolledwin, True, True, 0)
+            vbox2.pack_start(b, False, True, 0)
+            self.add(vbox2)
+            close.grab_focus()
+        else:
+            self.add(scrolledwin)
 
-        close.grab_focus()
         self.get_child().show_all()
 
 
@@ -253,8 +260,8 @@ class PluginPreferencesContainer(Gtk.VBox):
                 else:
                     if isinstance(prefs, Gtk.Window):
                         b = Gtk.Button(stock=Gtk.STOCK_PREFERENCES)
-                        b.connect_object('clicked', Gtk.Window.show, prefs)
-                        b.connect_object('destroy', Gtk.Window.destroy, prefs)
+                        connect_obj(b, 'clicked', Gtk.Window.show, prefs)
+                        connect_obj(b, 'destroy', Gtk.Window.destroy, prefs)
                         frame.add(b)
                         frame.get_child().set_border_width(6)
                     else:
@@ -264,7 +271,7 @@ class PluginPreferencesContainer(Gtk.VBox):
             frame.hide()
 
 
-class PluginWindow(qltk.UniqueWindow):
+class PluginWindow(UniqueWindow):
     def __init__(self, parent=None):
         if self.is_not_unique():
             return
@@ -274,7 +281,7 @@ class PluginWindow(qltk.UniqueWindow):
         self.set_default_size(655, 404)
         self.set_transient_for(parent)
 
-        paned = Gtk.Paned()
+        paned = Paned()
         vbox = Gtk.VBox(spacing=6)
 
         sw = Gtk.ScrolledWindow()
@@ -327,7 +334,7 @@ class PluginWindow(qltk.UniqueWindow):
 
         close = Gtk.Button(stock=Gtk.STOCK_CLOSE)
         close.connect('clicked', lambda *x: self.destroy())
-        bb_align = Gtk.Alignment.new(0, 1, 1, 0)
+        bb_align = Align(halign=Gtk.Align.END, valign=Gtk.Align.END)
         bb = Gtk.HButtonBox()
         bb.set_layout(Gtk.ButtonBoxStyle.END)
         bb.pack_start(close, True, True, 0)
@@ -339,9 +346,11 @@ class PluginWindow(qltk.UniqueWindow):
 
         right_box = Gtk.VBox(spacing=12)
         right_box.pack_start(pref_box, True, True, 0)
-        right_box.pack_start(bb_align, True, True, 0)
+        self.use_header_bar()
+        if not self.has_close_button():
+            right_box.pack_start(bb_align, True, True, 0)
 
-        paned.pack2(Alignment(right_box, left=6), True, False)
+        paned.pack2(Align(right_box, left=6), True, False)
         paned.set_position(250)
 
         self.add(paned)

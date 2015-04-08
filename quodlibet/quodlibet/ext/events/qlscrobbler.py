@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # QLScrobbler: an Audioscrobbler client plugin for Quod Libet.
 # version 0.11
 # (C) 2005-2012 by Joshua Kwan <joshk@triplehelix.org>,
@@ -23,11 +24,12 @@ try:
 except ImportError:
     from md5 import md5
 
-import quodlibet
-from quodlibet import config, const, app, parse, util, qltk
+from quodlibet import config, const, app, util, qltk
+from quodlibet.pattern import Pattern
+from quodlibet.query import Query
 from quodlibet.plugins.events import EventPlugin
 from quodlibet.plugins import PluginConfigMixin
-from quodlibet.qltk.entry import ValidatingEntry, UndoEntry
+from quodlibet.qltk.entry import ValidatingEntry, UndoEntry, QueryValidator
 from quodlibet.qltk.msg import Message
 from quodlibet.util.dprint import print_d
 
@@ -58,6 +60,7 @@ class QLSubmitQueue(PluginConfigMixin):
     """
 
     CLIENT = "qlb"
+    CLIENT_VERSION = const.VERSION
     PROTOCOL_VERSION = "1.2"
     DUMP = os.path.join(const.USERDIR, "scrobbler_cache")
     # This must be the kept the same as `QLScrobbler`
@@ -129,9 +132,9 @@ class QLSubmitQueue(PluginConfigMixin):
         self.username, self.password, self.base_url = ('', '', '')
 
         # These need to be set early for _format_song to work
-        self.titlepat = parse.Pattern(
+        self.titlepat = Pattern(
             self.config_get('titlepat', "") or DEFAULT_TITLEPAT)
-        self.artpat = parse.Pattern(
+        self.artpat = Pattern(
             self.config_get('artistpat', "") or DEFAULT_ARTISTPAT)
 
         try:
@@ -160,9 +163,9 @@ class QLSubmitQueue(PluginConfigMixin):
         url = self.config_get_url()
         if not user or not passw or not url:
             if self.queue and not self.broken:
-                self.quick_dialog("Please visit the Plugins window to set "
+                self.quick_dialog(_("Please visit the Plugins window to set "
                               "QLScrobbler up. Until then, songs will not be "
-                              "submitted.", Gtk.MessageType.INFO)
+                              "submitted."), Gtk.MessageType.INFO)
                 self.broken = True
         elif (self.username, self.password,
                 self.base_url) != (user, passw, url):
@@ -170,9 +173,9 @@ class QLSubmitQueue(PluginConfigMixin):
             self.broken = False
             self.handshake_sent = False
         self.offline = self.config_get_bool('offline')
-        self.titlepat = parse.Pattern(
+        self.titlepat = Pattern(
                 self.config_get('titlepat', "") or DEFAULT_TITLEPAT)
-        self.artpat = parse.Pattern(
+        self.artpat = Pattern(
                 self.config_get('artistpat', "") or DEFAULT_ARTISTPAT)
 
     def changed(self):
@@ -230,7 +233,7 @@ class QLSubmitQueue(PluginConfigMixin):
         auth = md5(self.password + str(stamp)).hexdigest()
         url = "%s/?hs=true&p=%s&c=%s&v=%s&u=%s&a=%s&t=%d" % (
                     self.base_url, self.PROTOCOL_VERSION, self.CLIENT,
-                    QLScrobbler.PLUGIN_VERSION, self.username, auth, stamp)
+                    self.CLIENT_VERSION, self.username, auth, stamp)
         print_d("Sending handshake to service.")
 
         try:
@@ -238,13 +241,13 @@ class QLSubmitQueue(PluginConfigMixin):
         except (IOError, HTTPException):
             if show_dialog:
                 self.quick_dialog(
-                    "Could not contact service '%s'." %
+                    _("Could not contact service '%s'.") %
                     util.escape(self.base_url), Gtk.MessageType.ERROR)
             else:
                 print_d("Could not contact service. Queueing submissions.")
             return False
         except ValueError:
-            self.quick_dialog("Authentication failed: invalid URL.",
+            self.quick_dialog(_("Authentication failed: invalid URL."),
                 Gtk.MessageType.ERROR)
             self.broken = True
             return False
@@ -261,17 +264,17 @@ class QLSubmitQueue(PluginConfigMixin):
                 self.session_id, self.nowplaying_url, self.submit_url))
             return True
         elif status == "BADAUTH":
-            self.quick_dialog("Authentication failed: Invalid username '%s' "
-                            "or bad password." % util.escape(self.username),
+            self.quick_dialog(_("Authentication failed: Invalid username '%s' "
+                            "or bad password.") % util.escape(self.username),
                             Gtk.MessageType.ERROR)
             self.broken = True
         elif status == "BANNED":
-            self.quick_dialog("Client is banned. Contact the author.",
+            self.quick_dialog(_("Client is banned. Contact the author."),
                               Gtk.MessageType.ERROR)
             self.broken = True
         elif status == "BADTIME":
-            self.quick_dialog("Wrong system time. Submissions may fail until "
-                              "it is corrected.", Gtk.MessageType.ERROR)
+            self.quick_dialog(_("Wrong system time. Submissions may fail "
+                            "until it is corrected."), Gtk.MessageType.ERROR)
         else:  # "FAILED"
             self.quick_dialog(status, Gtk.MessageType.ERROR)
         self.changed()
@@ -339,7 +342,6 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
     PLUGIN_DESC = _("Audioscrobbler client for Last.fm, Libre.fm and other "
                     "Audioscrobbler services.")
     PLUGIN_ICON = Gtk.STOCK_CONNECT
-    PLUGIN_VERSION = "0.12"
     # Retain original config section
     CONFIG_SECTION = "scrobbler"
 
@@ -356,9 +358,6 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
         self.nowplaying = None
 
         self.exclude = self.config_get('exclude')
-
-        # Set up exit hook to dump queue
-        quodlibet.quit_add(0, self.queue.dump_queue)
 
     def config_get_url(self):
         """Gets the URL for the currently configured service.
@@ -383,13 +382,13 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
         if self.elapsed < 240 and self.elapsed <= .5 * song.get("~#length", 0):
             return
         print_d("Checking against filter %s" % self.exclude)
-        if self.exclude and parse.Query(self.exclude).search(song):
+        if self.exclude and Query(self.exclude).search(song):
             print_d("Not submitting: %s" % song("~artist~title"))
             return
         self.queue.submit(song, self.start_time)
 
     def song_excluded(self, song):
-        if self.exclude and parse.Query(self.exclude).search(song):
+        if self.exclude and Query(self.exclude).search(song):
             print_d("%s is excluded by %s" %
                     (song("~artist~title"), self.exclude))
             return True
@@ -431,6 +430,7 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
     def disabled(self):
         self.__enabled = False
         print_d("Plugin disabled - not accepting any new songs.")
+        QLSubmitQueue.dump_queue()
 
     def PluginPreferences(self, parent):
         def changed(entry, key):
@@ -448,20 +448,21 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
             queue.changed()
             status = queue.send_handshake(show_dialog=True)
             if status:
-                queue.quick_dialog("Authentication successful.",
+                queue.quick_dialog(_("Authentication successful."),
                     Gtk.MessageType.INFO)
 
         box = Gtk.VBox(spacing=12)
 
         # first frame
-        table = Gtk.Table(5, 2)
+        table = Gtk.Table(n_rows=5, n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
         labels = []
         label_names = [_("_Service:"), _("_URL:"), _("User_name:"),
             _("_Password:")]
-        for idx, label in enumerate(map(Gtk.Label, label_names)):
+        for idx, name in enumerate(label_names):
+            label = Gtk.Label(label=name)
             label.set_alignment(0.0, 0.5)
             label.set_use_underline(True)
             table.attach(label, 0, 1, idx, idx + 1,
@@ -473,7 +474,10 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
         service_combo = Gtk.ComboBoxText()
         table.attach(service_combo, 1, 2, row, row + 1)
         cur_service = self.config_get('service')
-        for idx, serv in enumerate(sorted(SERVICES.keys()) + ["Other..."]):
+
+        # Translators: Other service
+        other_label = _(u"Other…")
+        for idx, serv in enumerate(sorted(SERVICES.keys()) + [other_label]):
             service_combo.append_text(serv)
             if cur_service == serv:
                 service_combo.set_active(idx)
@@ -517,7 +521,7 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
         box.pack_start(qltk.Frame(_("Account"), child=table), True, True, 0)
 
         # second frame
-        table = Gtk.Table(4, 2)
+        table = Gtk.Table(n_rows=4, n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
@@ -525,7 +529,8 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
             _("Exclude _filter:")]
 
         labels = []
-        for idx, label in enumerate(map(Gtk.Label, label_names)):
+        for idx, name in enumerate(label_names):
+            label = Gtk.Label(label=name)
             label.set_alignment(0.0, 0.5)
             label.set_use_underline(True)
             table.attach(label, 0, 1, idx, idx + 1,
@@ -555,7 +560,7 @@ class QLScrobbler(EventPlugin, PluginConfigMixin):
         row += 1
 
         # exclude filter
-        entry = ValidatingEntry(parse.Query.is_valid_color)
+        entry = ValidatingEntry(QueryValidator)
         entry.set_text(self.config_get('exclude'))
         entry.set_tooltip_text(
                 _("Songs matching this filter will not be submitted."))

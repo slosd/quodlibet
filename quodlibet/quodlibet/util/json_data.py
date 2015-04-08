@@ -1,10 +1,14 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012-2013 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
+from __future__ import absolute_import
+
 import json
+from collections import namedtuple
 from quodlibet.util.dprint import print_d, print_w
 
 
@@ -14,8 +18,15 @@ class JSONObject(object):
     that can be edited and persisted as JSON.
     """
 
-    # Override this to specify a set of field names, or a map of field: doc
-    # Must include "name" if specified.
+    NAME = ""
+
+    # The format for JSONObject.
+    Field = namedtuple('Field', ['human_name', 'doc'])
+    EMPTY_FIELD = Field(None, None)
+
+    # Override this to specify a set of field names,
+    # or a dict of field: FieldData
+    # Must include "name" if dict is specified.
     FIELDS = {}
 
     @classmethod
@@ -39,10 +50,11 @@ class JSONObject(object):
             return dict([(k, v) for k, v in self.__dict__.items()
                          if self._should_store(k)])
 
-    def field_description(self, name):
-        """Returns the description of field `name` if available, else None"""
+    def field(self, name):
+        """Returns the Field metadata of field `name` if available,
+        or an null / empty one"""
         if isinstance(self.FIELDS, dict):
-            return self.FIELDS.get(name, None)
+            return self.FIELDS.get(name, self.EMPTY_FIELD)
 
     @property
     def json(self):

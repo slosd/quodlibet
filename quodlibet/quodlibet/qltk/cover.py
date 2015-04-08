@@ -10,10 +10,12 @@ from gi.repository import Gtk, GLib, Gdk, GdkPixbuf, Gio, GObject
 
 from quodlibet import qltk
 from quodlibet import config
+from quodlibet import app
 from quodlibet.util import thumbnails
+from quodlibet.util.path import is_fsnative
 from quodlibet.qltk.image import (get_scale_factor, pixbuf_from_file,
-    set_image_from_pbosf, get_pbosf_for_pixbuf, pbosf_render)
-from quodlibet.util.cover.manager import cover_plugins
+    set_image_from_pbosf, get_pbosf_for_pixbuf, pbosf_render, calc_scale_size,
+    scale, add_border_widget)
 
 
 # TODO: neater way of managing dependency on this particular plugin
@@ -111,7 +113,11 @@ class ResizeImage(Gtk.Bin):
         self._resize = resize
 
     def set_file(self, fileobj):
-        path = fileobj and fileobj.name
+        if fileobj is None:
+            path = None
+        else:
+            path = fileobj.name
+            assert is_fsnative(path)
 
         # XXX: Don't reload if the file path is the same.
         # Could prevent updates if fileobj.name isn't defined
@@ -132,11 +138,8 @@ class ResizeImage(Gtk.Bin):
 
         self._pixbuf = None
         if self._file:
-            try:
-                self._pixbuf = thumbnails.get_thumbnail_from_file(
-                    self._file, (max_size, max_size))
-            except GLib.GError:
-                pass
+            self._pixbuf = thumbnails.get_thumbnail_from_file(
+                self._file, (max_size, max_size))
 
         if not self._pixbuf:
             self._pixbuf = get_no_cover_pixbuf(max_size, max_size)
@@ -148,9 +151,7 @@ class ResizeImage(Gtk.Bin):
         if not pixbuf:
             return 0, 0
         width, height = pixbuf.get_width(), pixbuf.get_height()
-        return thumbnails.calc_scale_size(
-                (max_width, max_height),
-                (width, height))
+        return calc_scale_size((max_width, max_height), (width, height))
 
     def do_get_request_mode(self):
         if self._resize:
@@ -193,15 +194,14 @@ class ResizeImage(Gtk.Bin):
         height *= scale_factor
 
         if self._path:
-            if width < 2 or height < 2:
+            if width < (2 * scale_factor) or height < (2 * scale_factor):
                 return
             round_thumbs = config.getboolean("albumart", "round")
-            pixbuf = thumbnails.scale(
+            pixbuf = scale(
                 pixbuf, (width - 2 * scale_factor, height - 2 * scale_factor))
-            pixbuf = thumbnails.add_border(
-                pixbuf, 80, round=round_thumbs, width=scale_factor)
+            pixbuf = add_border_widget(pixbuf, self, None, round_thumbs)
         else:
-            pixbuf = thumbnails.scale(pixbuf, (width, height))
+            pixbuf = scale(pixbuf, (width, height))
 
         style_context = self.get_style_context()
 
@@ -254,7 +254,7 @@ class CoverImage(Gtk.EventBox):
                         # following error.
                     except AttributeError:
                         pass
-            cover_plugins.acquire_cover(cb, cancellable, song)
+            app.cover_manager.acquire_cover(cb, cancellable, song)
 
     def refresh(self):
         self.set_song(self.__song)

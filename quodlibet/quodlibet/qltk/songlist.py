@@ -1,6 +1,8 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig
 #           2012 Christoph Reiter
 #      2011-2013 Nick Boultbee
+#           2014 Jan Path
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -10,21 +12,22 @@ from gi.repository import Gtk, GLib, Gdk, GObject
 
 from quodlibet import app
 from quodlibet import config
+from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
 
-from quodlibet.parse import Query, Pattern
+from quodlibet.query import Query
+from quodlibet.pattern import Pattern
 from quodlibet.qltk.information import Information
 from quodlibet.qltk.properties import SongProperties
 from quodlibet.qltk.views import AllTreeView, DragScroll
-from quodlibet.qltk.ratingsmenu import RatingsMenuItem
 from quodlibet.qltk.ratingsmenu import ConfirmRateMultipleDialog
 from quodlibet.qltk.songmodel import PlaylistModel
 from quodlibet.util.uri import URI
 from quodlibet.formats._audio import TAG_TO_SORT, AudioFile
 from quodlibet.qltk.x import SeparatorMenuItem
-from quodlibet.util import human_sort_key
 from quodlibet.qltk.songlistcolumns import create_songlist_column
+from quodlibet.util import connect_destroy
 
 
 DND_QL, DND_URI_LIST = range(2)
@@ -106,6 +109,31 @@ class SongInfoSelection(GObject.Object):
         self.__count = count
 
 
+def get_columns():
+    """Gets the list of songlist column headings"""
+
+    if config.has_option("settings", "columns"):
+        return config.getstringlist(
+            "settings", "columns", const.DEFAULT_COLUMNS)
+    else:
+        # migrate old settings
+        try:
+            columns = config.get("settings", "headers").split()
+        except config.Error:
+            return const.DEFAULT_COLUMNS
+        else:
+            config.remove_option("settings", "headers")
+            set_columns(columns)
+            config.setstringlist("settings", "columns", columns)
+            return columns
+
+
+def set_columns(vals):
+    """Persists the settings for songlist headings held in `vals`"""
+
+    config.setstringlist("settings", "columns", vals)
+
+
 def get_sort_tag(tag):
     """Returns a tag that can be used for sorting for the given column tag.
 
@@ -139,6 +167,18 @@ def get_sort_tag(tag):
             tag = "~" + "~".join(sort_tags)
 
     return tag
+
+
+def header_tag_split(header):
+    """Split a pattern or a tied tag into separate tags"""
+
+    if "<" in header:
+        try:
+            return list(Pattern(header).tags)
+        except ValueError:
+            return []
+    else:
+        return util.tagsplit(header)
 
 
 class SongListDnDMixin(object):
@@ -284,10 +324,7 @@ class SongListDnDMixin(object):
 
     def __drag_data_browser_dropped(self, songs):
         window = qltk.get_top_parent(self)
-        if callable(window.browser.dropped):
-            return window.browser.dropped(self, songs)
-        else:
-            return False
+        return window.browser.dropped(songs)
 
 
 class SongList(AllTreeView, SongListDnDMixin, DragScroll,
@@ -308,40 +345,33 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         if not songs:
             return
 
-        can_filter = browser.can_filter
-
-        menu = browser.Menu(songs, self, library)
-
         def Filter(t):
             # Translators: The substituted string is the name of the
             # selected column (a translated tag name).
             b = qltk.MenuItem(
                 _("_Filter on %s") % util.tag(t, True), Gtk.STOCK_INDEX)
-            b.connect_object('activate', self.__filter_on, t, songs, browser)
+            b.connect('activate', self.__filter_on, t, songs, browser)
             return b
 
-        header = util.tagsplit(header)[0]
-
-        if can_filter("artist") or can_filter("album") or can_filter(header):
-            menu.preseparate()
-
-        if can_filter("artist"):
-            menu.prepend(Filter("artist"))
-        if can_filter("album"):
-            menu.prepend(Filter("album"))
+        header = header_tag_split(header)[0]
+        can_filter = browser.can_filter
+        menu_items = []
         if (header not in ["artist", "album"] and can_filter(header)):
-            menu.prepend(Filter(header))
+            menu_items.append(Filter(header))
+        if can_filter("artist"):
+            menu_items.append(Filter("artist"))
+        if can_filter("album"):
+            menu_items.append(Filter("album"))
 
-        ratings = RatingsMenuItem(songs, library)
-        menu.preseparate()
-        menu.prepend(ratings)
+        menu = browser.Menu(songs, library, items=[menu_items])
         menu.show_all()
         return menu
 
-    def __init__(self, library, player=None, update=False):
+    def __init__(self, library, player=None, update=False,
+                 model_cls=PlaylistModel):
         super(SongList, self).__init__()
         self._register_instance(SongList)
-        self.set_model(PlaylistModel())
+        self.set_model(model_cls())
         self.info = SongInfoSelection(self)
         self.set_size_request(200, 150)
         self.set_rules_hint(True)
@@ -354,26 +384,20 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         self._sort_sequence = []
         self.set_column_headers(self.headers)
         librarian = library.librarian or library
-        sigs = []
-        # The player needs to be called first so it can ge the next song
-        # in case the current one gets deleted and the order gets reset.
-        if player:
-            s = librarian.connect_object('removed', map, player.remove)
-            sigs.append(s)
-        sigs.extend([librarian.connect('changed', self.__song_updated),
-                librarian.connect('removed', self.__song_removed)])
+
+        connect_destroy(librarian, 'changed', self.__song_updated)
+        connect_destroy(librarian, 'removed', self.__song_removed, player)
+
         if update:
-            sigs.append(librarian.connect('added', self.__song_added))
-        for sig in sigs:
-            self.connect_object('destroy', librarian.disconnect, sig)
+            connect_destroy(librarian, 'added', self.__song_added)
+
         if player:
-            sigs = [
-                player.connect('paused', lambda *x: self.__redraw_current()),
-                player.connect('unpaused', lambda *x: self.__redraw_current()),
-                player.connect('error', lambda *x: self.__redraw_current()),
-            ]
-            for sig in sigs:
-                self.connect_object('destroy', player.disconnect, sig)
+            connect_destroy(
+                player, 'paused', lambda *x: self.__redraw_current())
+            connect_destroy(
+                player, 'unpaused', lambda *x: self.__redraw_current())
+            connect_destroy(
+                player, 'error', lambda *x: self.__redraw_current())
 
         self.connect('button-press-event', self.__button_press, librarian)
         self.connect('key-press-event', self.__key_press, librarian)
@@ -388,6 +412,10 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
     @property
     def model(self):
         return self.get_model()
+
+    @property
+    def sourced(self):
+        return self.model.sourced
 
     def toggle_column_sort(self, column, replace=True, refresh=True):
         """Toggles the sort order of a column.
@@ -449,7 +477,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
             if reversed_:
                 # python sort is faster if presorted
                 songs.reverse()
-            self.set_songs(songs)
+            self.set_songs(songs, scroll_select=True)
 
         self.emit("orders-changed")
 
@@ -517,6 +545,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
 
     def __destroy(self, *args):
         self.info.destroy()
+        self.info = None
         self.handler_block(self.__csig)
         for column in self.get_columns():
             self.remove_column(column)
@@ -532,7 +561,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         else:
             return True
 
-    def __filter_on(self, header, songs, browser):
+    def __filter_on(self, widget, header, songs, browser):
         if not browser:
             return
 
@@ -555,7 +584,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
             return True
         if event.window != self.get_bin_window():
             return False
-        if col.header_name == "~#rating":
+        if col.header_name == "~rating":
             if not config.getboolean("browsers", "rating_click"):
                 return
 
@@ -572,7 +601,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
             rating = max(0.0, min(1.0, count * precision))
             if (rating <= precision and
                     song("~#rating") == precision):
-                rating = 0
+                rating = 0.0
             self.__set_rating(rating, [song], librarian)
 
     def __set_rating(self, value, songs, librarian):
@@ -651,7 +680,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
 
     @classmethod
     def set_all_column_headers(cls, headers):
-        config.set_columns(headers)
+        set_columns(headers)
         try:
             headers.remove("~current")
         except ValueError:
@@ -662,21 +691,26 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
 
         star = list(Query.STAR)
         for header in headers:
-            if "<" in header:
-                try:
-                    tags = Pattern(header).tags
-                except ValueError:
-                    continue
-            else:
-                tags = util.tagsplit(header)
-            for tag in tags:
+            for tag in header_tag_split(header):
                 if not tag.startswith("~#") and tag not in star:
                     star.append(tag)
+
+        for tag in config.getlist("settings", "search_tags"):
+            if tag and tag not in star:
+                star.append(tag)
+
         SongList.star = star
 
     def set_model(self, model):
         super(SongList, self).set_model(model)
         self.set_search_column(0)
+
+    def clear(self):
+        """Remove all songs"""
+
+        model = self.get_model()
+        if model:
+            model.clear()
 
     def get_songs(self):
         """Get all songs currently in the song list"""
@@ -722,7 +756,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
 
         model = self.get_model()
         if not len(model):
-            self.set_songs(songs)
+            self.set_songs(songs, scroll=False)
             return
 
         if not self.is_sorted():
@@ -738,14 +772,20 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         for index, song in sorted(zip(map(old_songs.index, songs), songs)):
             model.insert(index, row=[song])
 
-    def set_songs(self, songs, sorted=False):
+    def set_songs(self, songs, sorted=False, scroll=True, scroll_select=False):
         """Fill the song list.
 
         If sorted is True, the passed songs will not be sorted and
         all sort indicators will be removed.
+
+        If scroll is True the list will scroll to the current song.
+
+        If scroll_select is True restore the selection of the first
+        selected song and scroll to. Falls back to the current song.
         """
 
         model = self.get_model()
+        assert model is not None
 
         if not sorted:
             # make sure some sorting is set and visible
@@ -757,8 +797,31 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         else:
             self.clear_sort()
 
+        restore_song = None
+        if scroll_select:
+            restore_song = self.get_first_selected_song()
+
         with self.without_model() as model:
             model.set(songs)
+
+        # scroll to the first selected or current song and restore
+        # selection for the first selected item if there was one
+        if scroll or scroll_select:
+            if restore_song is not None and restore_song is not model.current:
+                try:
+                    index = songs.index(restore_song)
+                except ValueError:
+                    path = model.current_path
+                else:
+                    path = Gtk.TreePath.new()
+                    path.append_index(index)
+            else:
+                path = model.current_path
+
+            if path is not None:
+                if restore_song is not None:
+                    self.set_cursor(path)
+                self.scroll_to_cell(path, use_align=True, row_align=0.5)
 
         # the song selection has queued a change now, cancel that and
         # pass the songs manually
@@ -783,11 +846,19 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
                 return False
             path = model.get_path(iter_)
 
-        self.scroll_to_cell(path, use_align=True, row_align=0.5)
         if select:
             self.set_cursor(path)
+        self.scroll_to_cell(path, use_align=True, row_align=0.5)
 
         return True
+
+    def get_first_selected_song(self):
+        """The first selected song in the list or None"""
+
+        selection = self.get_selection()
+        model, paths = selection.get_selected_rows()
+        if paths:
+            return model.get_value(model.get_iter(paths[0]))
 
     def get_selected_songs(self):
         """Returns a list of selected songs"""
@@ -821,7 +892,14 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         if callable(filter_):
             self.add_songs(filter(filter_, songs))
 
-    def __song_removed(self, librarian, songs):
+    def __song_removed(self, librarian, songs, player):
+        # The player needs to be called first so it can ge the next song
+        # in case the current one gets deleted and the order gets reset.
+
+        if player:
+            for song in songs:
+                player.remove(song)
+
         # The selected songs are removed from the library and should
         # be removed from the view.
 
@@ -938,7 +1016,11 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
 
     def __getmenu(self, column):
         menu = Gtk.Menu()
-        menu.connect_object('selection-done', Gtk.Menu.destroy, menu)
+
+        def selection_done_cb(menu):
+            menu.destroy()
+
+        menu.connect('selection-done', selection_done_cb)
 
         current = SongList.headers[:]
         current_set = set(current)
@@ -966,7 +1048,7 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         menu.append(sep)
 
         trackinfo = """title genre ~title~version ~#track
-            ~#playcount ~#skipcount ~#rating ~#length""".split()
+            ~#playcount ~#skipcount ~rating ~#length""".split()
         peopleinfo = """artist ~people performer arranger author composer
             conductor lyricist originalartist""".split()
         albuminfo = """album ~album~discsubtitle labelid ~#disc ~#discs
@@ -1002,12 +1084,12 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         menu.append(sep)
 
         custom = Gtk.MenuItem(
-            label=_("_Customize Headers..."), use_underline=True)
+            label=_(u"_Customize Headers…"), use_underline=True)
         custom.show()
         custom.connect('activate', self.__add_custom_column)
         menu.append(custom)
 
-        item = Gtk.CheckMenuItem(label=_("_Expand"), use_underline=True)
+        item = Gtk.CheckMenuItem(label=_("_Expand Column"), use_underline=True)
         item.set_active(column.get_expand())
         item.set_sensitive(column.get_resizable())
 
@@ -1065,11 +1147,23 @@ class SongList(AllTreeView, SongListDnDMixin, DragScroll,
         if event is not None and event.button != Gdk.BUTTON_SECONDARY:
             return False
 
+        menu = self.__getmenu(column)
+        menu.attach_to_widget(self, None)
+
         if event:
-            self.__getmenu(column).popup(None, None, None, None,
-                                         event.button, time)
+            menu.popup(None, None, None, None, event.button, time)
             return True
 
         widget = column.get_widget()
-        return qltk.popup_menu_under_widget(self.__getmenu(column),
-                widget, 3, time)
+        return qltk.popup_menu_under_widget(menu, widget, 3, time)
+
+
+@config.register_upgrade_function
+def _migrate_rating_column(config, old, new):
+    if old < 0:
+        # https://github.com/quodlibet/quodlibet/issues/1381
+        columns = get_columns()[:]
+        for i, c in enumerate(columns):
+            if c == "~#rating":
+                columns[i] = "~rating"
+        set_columns(columns)

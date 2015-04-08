@@ -56,7 +56,8 @@ Verbose mode
 \fIset\fP         Set a tag and remove existing values
 \fIclear\fP       Remove tags
 \fIcopy\fP        Copy tags from one file to another
-\fIdump\fP        Print all tags to stdout
+\fIedit\fP        Edit tags in a text editor
+\fIfill\fP        Fill tags based on the file path
 .fi
 .sp
 .SS Show file metadata
@@ -188,22 +189,43 @@ Skip tags which the target file does not support
 .B Example:
 operon copy song.flac song.ogg
 .UNINDENT
-.SS dump
+.SS edit
 .sp
-Print all tags to stdout. The format is not specified. The data can be
-loaded again using \fIoperon load\fP, given the same version was used to create
-the data.
+Shows all tags in a text editor and will apply any changes made to the text to
+the tags. \fIoperon\fP will use the editor specified in the VISUAL or EDITOR
+environment variables and if those are not set fall back to \(aqnano\(aq.
 .sp
-operon dump [\-h] <src\-file>
+operon edit [\-h] [\-\-dry\-run] <file>
 .INDENT 0.0
 .TP
 .B \-h\fP,\fB  \-\-help
 Display help and exit
+.TP
+.B \-\-dry\-run
+Print the results without changing any files
 .UNINDENT
 .INDENT 0.0
 .TP
 .B Example:
-operon dump song.flac > backup.tags
+VISUAL=vi operon edit song.flac
+.UNINDENT
+.SS fill
+.sp
+Fill tags based one file paths and a given pattern.
+.sp
+operon fill [\-h] [\-\-dry\-run] <pattern> <file>...
+.INDENT 0.0
+.TP
+.B \-h\fP,\fB  \-\-help
+show this help message and exit
+.TP
+.B \-\-dry\-run
+show changes, don\(aqt apply them
+.UNINDENT
+.INDENT 0.0
+.TP
+.B Example:
+operon fill \-\-dry\-run "<tracknumber>. <title>" "01. Was Ist Ist.flac"
 .UNINDENT
 .SH SHOW FILE METADATA
 .SS list

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from tests import TestCase
 
 from gi.repository import Gtk
@@ -8,33 +9,34 @@ import quodlibet.config
 from quodlibet.browsers.search import SearchBar
 from quodlibet.browsers.empty import EmptyBar
 from quodlibet.formats._audio import AudioFile
+from quodlibet.util.path import fsnative
 from quodlibet.library import SongLibrary, SongLibrarian
 
 # Don't sort yet, album_key makes it complicated...
 SONGS = [AudioFile({
                 "title": "one",
                 "artist": "piman",
-                "~filename": "/dev/null"}),
+                "~filename": fsnative(u"/dev/null")}),
          AudioFile({
                 "title": "two",
                 "artist": "mu",
-                "~filename": "/dev/zero"}),
+                "~filename": fsnative(u"/dev/zero")}),
          AudioFile({
                 "title": "three",
                 "artist": "boris",
-                "~filename": "/bin/ls"}),
+                "~filename": fsnative(u"/bin/ls")}),
          AudioFile({
                 "title": "four",
                 "artist": "random",
                 "album": "don't stop",
                 "labelid": "65432-1",
-                "~filename": "/dev/random"}),
+                "~filename": fsnative(u"/dev/random")}),
          AudioFile({
                 "title": "five",
                 "artist": "shell",
                 "album": "don't stop",
                 "labelid": "12345-6",
-                "~filename": "/dev/sh"})]
+                "~filename": fsnative(u"/dev/sh")})]
 
 
 class TEmptyBar(TestCase):
@@ -47,7 +49,7 @@ class TEmptyBar(TestCase):
         for af in SONGS:
             af.sanitize()
         quodlibet.browsers.search.library.add(SONGS)
-        self.bar = self.Bar(quodlibet.browsers.search.library, False)
+        self.bar = self.Bar(quodlibet.browsers.search.library)
         self.bar.connect('songs-selected', self._expected)
 
     def _expected(self, bar, songs, sort):
@@ -69,11 +71,11 @@ class TEmptyBar(TestCase):
         self.expected = list(sorted(SONGS))
         self._do()
 
-    def test_dynamic(self):
-        self.failUnless(self.bar.dynamic(SONGS[0]))
+    def test_active_filter(self):
+        self.assertTrue(self.bar.active_filter(SONGS[0]))
         self.bar.filter_text("this does not match any song")
         self.expected = []
-        self.failIf(self.bar.dynamic(SONGS[0]))
+        self.assertFalse(self.bar.active_filter(SONGS[0]))
 
     def test_filter(self):
         self.expected = [SONGS[1]]

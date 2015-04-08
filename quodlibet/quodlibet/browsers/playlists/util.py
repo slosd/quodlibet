@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
@@ -9,8 +10,9 @@ from gi.repository import Gtk
 from quodlibet import formats, qltk
 from quodlibet.qltk.wlw import WaitLoadWindow
 from quodlibet.qltk.getstring import GetStringDialog
+from quodlibet.util import escape
 from quodlibet.util.collection import Playlist
-from quodlibet.util.path import mkdir, fsdecode
+from quodlibet.util.path import mkdir, fsdecode, is_fsnative
 from quodlibet import const
 
 
@@ -18,6 +20,7 @@ from quodlibet import const
 from quodlibet.util.uri import URI
 
 PLAYLISTS = os.path.join(const.USERDIR, "playlists")
+assert is_fsnative(PLAYLISTS)
 if not os.path.isdir(PLAYLISTS):
     mkdir(PLAYLISTS)
 
@@ -25,7 +28,7 @@ if not os.path.isdir(PLAYLISTS):
 class ConfirmRemovePlaylistDialog(qltk.Message):
     def __init__(self, parent, playlist):
         title = (_("Are you sure you want to delete the playlist '%s'?")
-                 % playlist.name)
+                 % escape(playlist.name))
         description = (_("All information about the selected playlist "
                          "will be deleted and can not be restored."))
 
@@ -47,23 +50,24 @@ class GetPlaylistName(GetStringDialog):
 
 def parse_m3u(filename, library=None):
     plname = fsdecode(os.path.basename(
-        os.path.splitext(filename)[0])).encode('utf-8')
+        os.path.splitext(filename)[0]))
+
     filenames = []
 
-    h = file(filename)
-    for line in h:
-        line = line.strip()
-        if line.startswith("#"):
-            continue
-        else:
-            filenames.append(line)
-    h.close()
+    with open(filename, "rb") as h:
+        for line in h:
+            line = line.strip()
+            if line.startswith("#"):
+                continue
+            else:
+                filenames.append(line)
     return __parse_playlist(plname, filename, filenames, library)
 
 
 def parse_pls(filename, name="", library=None):
     plname = fsdecode(os.path.basename(
-        os.path.splitext(filename)[0])).encode('utf-8')
+        os.path.splitext(filename)[0]))
+
     filenames = []
     h = file(filename)
     for line in h:
@@ -92,6 +96,8 @@ def __parse_playlist(name, plfilename, files, library):
         try:
             uri = URI(filename)
         except ValueError:
+            if os.name == "nt":
+                filename = filename.decode("utf-8", "replace")
             # Plain filename.
             filename = os.path.realpath(os.path.join(
                 os.path.dirname(plfilename), filename))

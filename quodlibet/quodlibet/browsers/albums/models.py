@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -8,7 +9,22 @@ from quodlibet.qltk.models import ObjectStore, ObjectModelFilter
 from quodlibet.qltk.models import ObjectModelSort
 
 
-class AlbumModel(ObjectStore):
+class AlbumModelMixin(object):
+
+    def get_albums(self, paths):
+        values = [self.get_value(self.get_iter(p), 0) for p in paths]
+        try:
+            values.remove(None)
+        except ValueError:
+            return values
+        else:
+            return [v for v in self.itervalues() if v]
+
+    def get_album(self, iter_):
+        return self.get_value(iter_, 0)
+
+
+class AlbumModel(ObjectStore, AlbumModelMixin):
 
     def __init__(self, library):
         super(AlbumModel, self).__init__()
@@ -27,8 +43,8 @@ class AlbumModel(ObjectStore):
     def refresh_all(self):
         """Trigger redraws for all rows"""
 
-        for row in self:
-            self.row_changed(row.path, row.iter)
+        for iter_, value in self.iterrows():
+            self.row_changed(self.get_path(iter_), iter_)
 
     def destroy(self):
         library = self.__library
@@ -43,16 +59,15 @@ class AlbumModel(ObjectStore):
             self.row_changed(row.path, row.iter)
 
     def _add_albums(self, library, added):
-        for album in added:
-            self.append(row=[album])
+        self.append_many(added)
         self._update_all()
 
     def _remove_albums(self, library, removed):
         removed_albums = removed.copy()
-        for row in self:
-            if row[0] and row[0] in removed_albums:
-                removed_albums.remove(row[0])
-                self.remove(row.iter)
+        for iter_, value in self.iterrows():
+            if value is not None and value in removed_albums:
+                removed_albums.remove(value)
+                self.remove(iter_)
                 if not removed_albums:
                     break
         self._update_all()
@@ -61,27 +76,12 @@ class AlbumModel(ObjectStore):
         """Trigger a row redraw for each album that changed"""
 
         changed_albums = changed.copy()
-        for row in self:
-            if row[0] and row[0] in changed_albums:
-                changed_albums.remove(row[0])
-                self.row_changed(row.path, row.iter)
+        for iter_, value in self.iterrows():
+            if value is not None and value in changed_albums:
+                changed_albums.remove(value)
+                self.row_changed(self.get_path(iter_), iter_)
                 if not changed_albums:
                     break
-
-
-class AlbumModelMixin(object):
-
-    def get_albums(self, paths):
-        values = [self.get_value(self.get_iter(p), 0) for p in paths]
-        try:
-            values.remove(None)
-        except ValueError:
-            return values
-        else:
-            return [v for v in self.itervalues() if v]
-
-    def get_album(self, iter_):
-        return self.get_value(iter_, 0)
 
 
 class AlbumFilterModel(ObjectModelFilter, AlbumModelMixin):

@@ -13,10 +13,11 @@ from quodlibet import config
 from quodlibet import qltk
 from quodlibet.config import RATINGS
 from quodlibet.qltk import SeparatorMenuItem
+from quodlibet.util import connect_obj
 
 
 class ConfirmRateMultipleDialog(qltk.Message):
-    def __init__(self, parent, count, value):
+    def __init__(self, parent, action_title, count, value):
         assert count > 1
 
         title = (_("Are you sure you want to change the "
@@ -28,8 +29,8 @@ class ConfirmRateMultipleDialog(qltk.Message):
         super(ConfirmRateMultipleDialog, self).__init__(
             Gtk.MessageType.WARNING, parent, title, desc, Gtk.ButtonsType.NONE)
 
-        self.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
-                         Gtk.STOCK_APPLY, Gtk.ResponseType.YES)
+        self.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        self.add_button(action_title, Gtk.ResponseType.YES)
 
 
 class RatingsMenuItem(Gtk.MenuItem):
@@ -39,7 +40,9 @@ class RatingsMenuItem(Gtk.MenuItem):
         count = len(songs)
         if (count > 1 and
                 config.getboolean("browsers", "rating_confirm_multiple")):
-            dialog = ConfirmRateMultipleDialog(self, count, value)
+            parent = qltk.get_menu_item_top_parent(self)
+            dialog = ConfirmRateMultipleDialog(
+                parent, _("Change _Rating"), count, value)
             if dialog.run() != Gtk.ResponseType.YES:
                 return
         for song in songs:
@@ -50,7 +53,9 @@ class RatingsMenuItem(Gtk.MenuItem):
         count = len(songs)
         if (count > 1 and
                 config.getboolean("browsers", "rating_confirm_multiple")):
-            dialog = ConfirmRateMultipleDialog(self, count, None)
+            parent = qltk.get_menu_item_top_parent(self)
+            dialog = ConfirmRateMultipleDialog(
+                parent, _("_Remove Rating"), count, None)
             if dialog.run() != Gtk.ResponseType.YES:
                 return
         reset = []
@@ -67,9 +72,9 @@ class RatingsMenuItem(Gtk.MenuItem):
         for i in RATINGS.all:
             itm = Gtk.MenuItem(label="%0.2f\t%s" % (i, util.format_rating(i)))
             submenu.append(itm)
-            itm.connect_object('activate', self.set_rating, i, songs, library)
+            connect_obj(itm, 'activate', self.set_rating, i, songs, library)
         reset = Gtk.MenuItem(label=_("_Remove rating"), use_underline=True)
-        reset.connect_object('activate', self.remove_rating, songs, library)
+        connect_obj(reset, 'activate', self.remove_rating, songs, library)
         submenu.append(SeparatorMenuItem())
         submenu.append(reset)
         submenu.show_all()

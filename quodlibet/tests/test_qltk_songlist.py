@@ -1,9 +1,14 @@
+# -*- coding: utf-8 -*-
+from gi.repository import Gtk
+
 from tests import TestCase
 
 from quodlibet.library import SongLibrary
-from quodlibet.qltk.songlist import SongList
+from quodlibet.util.path import fsnative
+from quodlibet.qltk.songlist import SongList, set_columns, get_columns, \
+    header_tag_split
 from quodlibet.formats._audio import AudioFile
-import quodlibet.config
+from quodlibet import config
 
 
 class TSongList(TestCase):
@@ -11,7 +16,7 @@ class TSongList(TestCase):
                "~#length", "~dirname", "~#track"]
 
     def setUp(self):
-        quodlibet.config.init()
+        config.init()
         self.songlist = SongList(SongLibrary())
 
         self.orders_changed = 0
@@ -103,6 +108,46 @@ class TSongList(TestCase):
     def test_set_songs(self):
         self.songlist.set_songs([], sorted=True)
         self.songlist.set_songs([], sorted=False)
+        self.songlist.set_songs([], scroll_select=True)
+        self.songlist.set_songs([], scroll_select=False)
+        self.songlist.set_songs([], scroll=True)
+        self.songlist.set_songs([], scroll=False)
+
+    def test_set_songs_restore_select(self):
+        song = AudioFile({"~filename": "/dev/null"})
+        self.songlist.add_songs([song])
+        sel = self.songlist.get_selection()
+        sel.select_path(Gtk.TreePath.new_first())
+
+        self.songlist.set_songs([song], scroll_select=True)
+        self.assertEqual(self.songlist.get_selected_songs(), [song])
+
+        song2 = AudioFile({"~filename": "/dev/null"})
+        self.songlist.set_songs([song2], scroll_select=True)
+        self.assertEqual(self.songlist.get_selected_songs(), [])
+
+    def test_set_songs_no_restore_select(self):
+        song = AudioFile({"~filename": "/dev/null"})
+        self.songlist.add_songs([song])
+        model = self.songlist.get_model()
+        model.go_to(song)
+        self.assertIs(model.current, song)
+        # only restore if there was a selected one
+        self.songlist.set_songs([song], scroll_select=True)
+        self.assertEqual(self.songlist.get_selected_songs(), [])
+
+    def test_get_selected_songs(self):
+        song = AudioFile({"~filename": "/dev/null"})
+        self.songlist.add_songs([song])
+        sel = self.songlist.get_selection()
+
+        sel.select_path(Gtk.TreePath.new_first())
+        self.assertEqual(self.songlist.get_selected_songs(), [song])
+        self.assertEqual(self.songlist.get_first_selected_song(), song)
+
+        sel.unselect_all()
+        self.assertEqual(self.songlist.get_selected_songs(), [])
+        self.assertIs(self.songlist.get_first_selected_song(), None)
 
     def test_add_songs(self):
         song = AudioFile({"~filename": "/dev/null"})
@@ -124,13 +169,13 @@ class TSongList(TestCase):
         from quodlibet import browsers
         from quodlibet.library import SongLibrary, SongLibrarian
 
-        song = AudioFile({"~filename": "/dev/null"})
+        song = AudioFile({"~filename": fsnative(u"/dev/null")})
         song.sanitize()
         self.songlist.set_songs([song])
 
         library = SongLibrary()
         library.librarian = SongLibrarian()
-        browser = browsers.get("EmptyBar")(library, True)
+        browser = browsers.get("EmptyBar")(library)
 
         self.songlist.set_column_headers(["foo"])
 
@@ -139,6 +184,34 @@ class TSongList(TestCase):
         sel.select_all()
         self.assertTrue(self.songlist.Menu("foo", browser, library))
 
+    def test_get_columns_migrates(self):
+        self.failIf(config.get("settings", "headers", None))
+        self.failIf(config.get("settings", "columns", None))
+
+        headers = "~album ~#replaygain_track_gain foobar"
+        config.set("settings", "headers", headers)
+        columns = get_columns()
+        self.failUnlessEqual(columns, ["~album", "~#replaygain_track_gain",
+                                       "foobar"])
+        self.failIf(config.get("settings", "headers", None))
+
+    def test_get_set_columns(self):
+        self.failIf(config.get("settings", "headers", None))
+        self.failIf(config.get("settings", "columns", None))
+        columns = ["first", "won't", "two words", "4"]
+        set_columns(columns)
+        self.failUnlessEqual(columns, get_columns())
+        columns += ["~~another~one"]
+        set_columns(columns)
+        self.failUnlessEqual(columns, get_columns())
+        self.failIf(config.get("settings", "headers", None))
+
+    def test_header_tag_split(self):
+        self.assertEqual(header_tag_split("foo"), ["foo"])
+        self.assertEqual(header_tag_split("~foo~bar"), ["foo", "bar"])
+        self.assertEqual(header_tag_split("<foo>"), ["foo"])
+        self.assertEqual(header_tag_split("<~foo~bar>"), ["foo", "bar"])
+
     def tearDown(self):
         self.songlist.destroy()
-        quodlibet.config.quit()
+        config.quit()

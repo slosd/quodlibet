@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2006-2007 Lukas Lalinsky
 #
 # This program is free software; you can redistribute it and/or modify
@@ -81,25 +82,25 @@ class XinePlaylistPlayer(BasePlayer):
         xine_event_create_listener_thread(self._event_queue,
             self._event_listener, None)
 
-    def destroy(self):
+    def _destroy(self):
         self._destroyed = True
 
         if self._stream:
             xine_close(self._stream)
             xine_dispose(self._stream)
+            self._stream = None
         if self._event_queue:
             xine_event_dispose_queue(self._event_queue)
         if self._audio_port:
             self._handle.close_audio_driver(self._audio_port)
         self._handle.exit()
-        super(XinePlaylistPlayer, self).destroy()
 
     def _playback_finished(self):
         if self._destroyed:
             return False
 
         self._source.next_ended()
-        self._end(False, gapless=True)
+        self._end(False, None, gapless=True)
         return False
 
     def _update_metadata(self):
@@ -161,7 +162,8 @@ class XinePlaylistPlayer(BasePlayer):
                 scale = self.song.replay_gain(profiles, pa_gain, fb_gain)
                 v = max(0.0, v * scale)
             v = min(100, int(v * 100))
-            xine_set_param(self._stream, XINE_PARAM_AUDIO_AMP_LEVEL, v)
+            if not self._destroyed:
+                xine_set_param(self._stream, XINE_PARAM_AUDIO_AMP_LEVEL, v)
         else:
             raise AttributeError
 
@@ -184,25 +186,28 @@ class XinePlaylistPlayer(BasePlayer):
         if xine_get_status(self._stream) != XINE_STATUS_PLAY:
             xine_play(self._stream, 0, 0)
 
-    def _set_paused(self, paused):
-        if paused != self._paused:
-            self._paused = paused
-            if self.song:
-                self.emit((paused and 'paused') or 'unpaused')
-                if self._paused:
-                    if not self.song.is_file:
-                        xine_close(self._stream)
-                        xine_open(self._stream, self.song("~uri"))
-                    else:
-                        self._pause()
-                else:
-                    self._play()
-            elif paused is True:
-                # Something wants us to pause between songs, or when
-                # we've got no song playing (probably StopAfterMenu).
-                self.emit('paused')
+    @property
+    def paused(self):
+        return self._paused
 
-    paused = property(lambda s: s._paused, _set_paused)
+    @paused.setter
+    def paused(self, paused):
+        if paused == self._paused:
+            return
+        self._paused = paused
+        self.emit((paused and 'paused') or 'unpaused')
+        if self._paused != paused:
+            return
+
+        if self.song:
+            if paused:
+                if not self.song.is_file:
+                    xine_close(self._stream)
+                    xine_open(self._stream, self.song("~uri"))
+                else:
+                    self._pause()
+            else:
+                self._play()
 
     def _error(self, player_error=None):
         if self._destroyed:
@@ -225,7 +230,7 @@ class XinePlaylistPlayer(BasePlayer):
             xine_play(self._stream, 0, int(pos))
         self.emit('seek', self.song, pos)
 
-    def _end(self, stopped, gapless=False):
+    def _end(self, stopped, next_song=None, gapless=False):
         # We need to set self.song to None before calling our signal
         # handlers. Otherwise, if they try to end the song they're given
         # (e.g. by removing it), then we get in an infinite loop.
@@ -236,8 +241,10 @@ class XinePlaylistPlayer(BasePlayer):
         # reset error state
         self.error = False
 
+        current = self._source.current if next_song is None else next_song
+
         # Then, set up the next song.
-        self.song = self.info = self._source.current
+        self.song = self.info = current
         self.emit('song-started', self.song)
 
         if self.song is not None:
@@ -248,6 +255,8 @@ class XinePlaylistPlayer(BasePlayer):
             if self._paused:
                 self._pause()
             else:
+                if song is None:
+                    self.emit("unpaused")
                 self._play()
             if gapless and self._supports_gapless:
                 xine_set_param(self._stream, XINE_PARAM_GAPLESS_SWITCH, 0)

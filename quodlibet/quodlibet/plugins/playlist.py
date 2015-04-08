@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013-2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
@@ -5,13 +6,44 @@
 # published by the Free Software Foundation
 
 from gi.repository import Gtk
-from quodlibet.qltk.msg import confirm_action
-from quodlibet.qltk.x import SeparatorMenuItem
+from quodlibet.qltk import get_top_parent, get_menu_item_top_parent
+from quodlibet.qltk.msg import WarningMessage
+from quodlibet.qltk.x import SeparatorMenuItem, Button
 from quodlibet.util import print_exc
 from quodlibet.util.dprint import print_d, print_e
-from quodlibet import qltk
 from quodlibet.plugins import PluginHandler, PluginManager
 from quodlibet.plugins.gui import MenuItemPlugin
+
+
+class ConfirmMultiPlaylistInvoke(WarningMessage):
+    """Dialog to confirm invoking a plugin with X playlists
+    in case X is high
+    """
+
+    RESPONSE_INVOKE = 1
+
+    def __init__(self, parent, plugin_name, count):
+        title = ngettext("Run the plugin \"%(name)s\" on %(count)d playlist?",
+                         "Run the plugin \"%(name)s\" on %(count)d playlists?",
+                         count) % {"name": plugin_name, "count": count}
+
+        super(ConfirmMultiPlaylistInvoke, self).__init__(
+            get_top_parent(parent),
+            title, "",
+            buttons=Gtk.ButtonsType.NONE)
+
+        self.add_button(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL)
+        delete_button = Button(_("_Run Plugin"), Gtk.STOCK_EXECUTE)
+        delete_button.show()
+        self.add_action_widget(delete_button, self.RESPONSE_INVOKE)
+        self.set_default_response(Gtk.ResponseType.CANCEL)
+
+    @classmethod
+    def confirm(cls, parent, plugin_name, count):
+        """Returns if the action was confirmed"""
+
+        resp = cls(parent, plugin_name, count).run()
+        return resp == cls.RESPONSE_INVOKE
 
 
 class PlaylistPlugin(MenuItemPlugin):
@@ -51,8 +83,8 @@ class PlaylistPlugin(MenuItemPlugin):
     plugin_playlist = None
     plugin_playlists = None
 
-    def __init__(self, playlists, library, window):
-        super(PlaylistPlugin, self).__init__(window)
+    def __init__(self, playlists, library):
+        super(PlaylistPlugin, self).__init__()
         self._library = library
 
         self.set_sensitive(bool(self.plugin_handles(playlists)))
@@ -67,16 +99,18 @@ class PlaylistPluginHandler(PluginHandler):
     def init_plugins(self):
         PluginManager.instance.register_handler(self)
 
-    def __init__(self, confirmer):
+    def __init__(self, confirmer=None):
+        """custom confirmer mainly for testing"""
+
         self.__plugins = []
-        # The method to call for confirmations of risky multi-invocations
-        self.confirm_multiple = confirmer
+        if confirmer is None:
+            self._confirm_multiple = ConfirmMultiPlaylistInvoke.confirm
+        else:
+            self._confirm_multiple = confirmer
 
     def populate_menu(self, menu, library, browser, playlists):
         """Appends items onto `menu` for each enabled playlist plugin,
         separated as necessary. """
-
-        top_parent = qltk.get_top_parent(browser)
 
         attrs = ['plugin_playlist', 'plugin_playlists']
 
@@ -91,7 +125,7 @@ class PlaylistPluginHandler(PluginHandler):
             usable = any([callable(getattr(Kind, s)) for s in attrs])
             if usable:
                 try:
-                    items.append(Kind(playlists, library, top_parent))
+                    items.append(Kind(playlists, library))
                 except:
                     print_e("Couldn't initialise playlist plugin %s: " % Kind)
                     print_exc()
@@ -105,28 +139,34 @@ class PlaylistPluginHandler(PluginHandler):
                     args = (library, browser, playlists)
                     if item.get_submenu():
                         for subitem in item.get_submenu().get_children():
-                            subitem.connect_object(
-                                'activate', self.__handle, item, *args)
+                            subitem.connect(
+                                'activate', self.__on_activate, item, *args)
                     else:
-                        item.connect('activate', self.__handle, *args)
+                        item.connect(
+                            'activate', self.__on_activate, item, *args)
                 except:
                     print_exc()
                     item.destroy()
 
-    def handle(self, plugin_id, library, parent, playlists):
+    def handle(self, plugin_id, library, browser, playlists):
         """Start a plugin directly without a menu"""
 
         for plugin in self.__plugins:
             if plugin.PLUGIN_ID == plugin_id:
                 try:
-                    plugin = plugin(playlists, library, parent)
+                    plugin = plugin(playlists, library)
                 except Exception:
                     print_exc()
                 else:
-                    self.__handle(plugin, library, parent, playlists)
+                    parent = get_top_parent(browser)
+                    self.__handle(plugin, library, browser, playlists, parent)
                 return
 
-    def __handle(self, plugin, library, browser, playlists):
+    def __on_activate(self, item, plugin, library, browser, playlists):
+        parent = get_menu_item_top_parent(item)
+        self.__handle(plugin, library, browser, playlists, parent)
+
+    def __handle(self, plugin, library, browser, playlists, parent):
         if len(playlists) == 0:
             return
 
@@ -146,13 +186,10 @@ class PlaylistPluginHandler(PluginHandler):
         if callable(plugin.plugin_playlist):
             total = len(playlists)
             if total > plugin.MAX_INVOCATIONS:
-                msg = ngettext("Are you sure you want to run "
-                                   "the \"%s\" plugin on %d playlist?",
-                               "Are you sure you want to run "
-                                   "the \"%s\" plugin on %d playlists?",
-                               total) % (plugin.PLUGIN_ID, total)
-                if not self.confirm_multiple(msg):
+                if not self._confirm_multiple(
+                        parent, plugin.PLUGIN_NAME, total):
                     return
+
             try:
                 ret = map(plugin.plugin_playlist, playlists)
                 if ret:
@@ -186,4 +223,4 @@ class PlaylistPluginHandler(PluginHandler):
 
 
 # Single instance
-PLAYLIST_HANDLER = PlaylistPluginHandler(confirm_action)
+PLAYLIST_HANDLER = PlaylistPluginHandler()

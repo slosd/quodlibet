@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
@@ -61,7 +62,7 @@ class SqueezeboxServer(object):
                     print_d("Trying %s..." % self.config)
                 self.telnet = Telnet(hostname, port, self._TIMEOUT)
             except socket.error:
-                print_w(_("Couldn't talk to %s") % (self.config,))
+                print_d("Couldn't talk to %s" % (self.config,))
             else:
                 result = self.__request("login %s %s" % (user, password))
                 if result != (6 * '*'):

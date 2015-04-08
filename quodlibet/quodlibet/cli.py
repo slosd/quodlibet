@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
@@ -5,134 +6,68 @@
 # published by the Free Software Foundation
 
 import os
-import stat
-import tempfile
-import signal
 import sys
-from quodlibet.util.dprint import print_, print_d, print_w, print_e
+from quodlibet.util.dprint import print_, print_e
+from quodlibet.remote import Remote, RemoteError
 
 
-def print_fifo(command):
-    import quodlibet
-    from quodlibet import const
+def exit_(status=None, notify_startup=False):
+    """Call this to abort the startup before any mainloop starts.
 
-    if not os.path.exists(const.CURRENT):
-        quodlibet.exit("not-running")
-    else:
-        fd, filename = tempfile.mkstemp()
-        try:
-            os.unlink(filename)
-            # mkfifo fails if the file exists, so this is safe.
-            os.mkfifo(filename, 0o600)
-
-            signal.signal(signal.SIGALRM, lambda: "" + 2)
-            signal.alarm(1)
-            f = file(const.CONTROL, "w")
-            signal.signal(signal.SIGALRM, signal.SIG_IGN)
-            f.write(command + " " + filename)
-            f.close()
-
-            f = file(filename, "r")
-            sys.stdout.write(f.read())
-            try:
-                os.unlink(filename)
-            except EnvironmentError:
-                pass
-            f.close()
-            quodlibet.exit()
-        except TypeError:
-            try:
-                os.unlink(filename)
-            except EnvironmentError:
-                pass
-            quodlibet.exit("not-running")
-
-
-def print_playing(fstring="<artist~album~tracknumber~title>"):
-    import quodlibet
-    from quodlibet.formats._audio import AudioFile
-    from quodlibet.parse import Pattern
-    from quodlibet import const
-
-    try:
-        text = open(const.CURRENT, "rb").read()
-        song = AudioFile()
-        song.from_dump(text)
-        print_(Pattern(fstring).format(song))
-        quodlibet.exit()
-    except (OSError, IOError):
-        print_(_("No song is currently playing."))
-        quodlibet.exit(True)
-
-
-def print_query(query):
-    """Queries library, dumping filenames of matches to stdout
-       See Issue 716
+    notify_startup needs to be true if QL could potentially have been
+    called from the desktop file.
     """
 
-    import quodlibet
-    import quodlibet.library
-    from quodlibet import const, config
-
-    print_d("Querying library for %r" % query)
-    if "rating" in query:
-        config.init(const.CONFIG)
-
-    library = quodlibet.library.init(const.LIBRARY)
-    songs = library.query(query)
-    sys.stdout.write("\n".join([song("~filename") for song in songs]) + "\n")
-    quodlibet.exit()
+    if notify_startup:
+        from gi.repository import Gdk
+        Gdk.notify_startup_complete()
+    raise SystemExit(status)
 
 
 def is_running():
-    from quodlibet import const
+    """If maybe is another instance running"""
 
-    # http://code.google.com/p/quodlibet/issues/detail?id=1131
-    # FIXME: There is a race where control() creates a new file
-    # instead of writing to the FIFO, confusing the next QL instance.
-    # Remove non-FIFOs here for now.
-    try:
-        if not stat.S_ISFIFO(os.stat(const.CONTROL).st_mode):
-            print_d("%r not a FIFO. Remove it." % const.CONTROL)
-            os.remove(const.CONTROL)
-    except OSError:
-        pass
-    return os.path.exists(const.CONTROL)
+    return Remote.remote_exists()
 
 
-def control(c):
-    import quodlibet
-    from quodlibet import const
+def control(command, arg=None, ignore_error=False):
+    """Sends command to the existing instance if possible and exits.
+
+    Will print any response it gets to stdout.
+
+    Does not return except if ignore_error is True and sending
+    the command failed.
+    """
 
     if not is_running():
-        quodlibet.exit(_("Quod Libet is not running."), notify_startup=True)
+        if ignore_error:
+            return
+        exit_(_("Quod Libet is not running (add '--run' to start it)"),
+              notify_startup=True)
+        return
+
+    message = command
+    if arg is not None:
+        message += " " + arg
+
+    try:
+        response = Remote.send_message(message)
+    except RemoteError as e:
+        if ignore_error:
+            return
+        exit_(str(e), notify_startup=True)
     else:
-        try:
-            # This is a total abuse of Python! Hooray!
-            signal.signal(signal.SIGALRM, lambda: "" + 2)
-            signal.alarm(1)
-            f = file(const.CONTROL, "w")
-            signal.signal(signal.SIGALRM, signal.SIG_IGN)
-            f.write(c)
-            f.close()
-        except (OSError, IOError, TypeError):
-            print_w(_("Unable to write to %s. Removing it.") % const.CONTROL)
-            try:
-                os.unlink(const.CONTROL)
-            except OSError:
-                pass
-            if c != 'focus':
-                raise quodlibet.exit(True, notify_startup=True)
-        else:
-            quodlibet.exit(notify_startup=True)
+        if response is not None:
+            print_(response, end="")
+        exit_(notify_startup=True)
 
 
 def process_arguments():
-    import quodlibet
     from quodlibet.util.uri import URI
     from quodlibet import util
     from quodlibet import const
 
+    actions = []
     controls = ["next", "previous", "play", "pause", "play-pause", "stop",
                 "hide-window", "show-window", "toggle-window",
                 "focus", "quit", "unfilter", "refresh", "force-previous"]
@@ -170,6 +105,7 @@ def process_arguments():
         ("print-playlist", _("Print the current playlist")),
         ("print-queue", _("Print the contents of the queue")),
         ("no-plugins", _("Start without plugins")),
+        ("run", _("Start Quod Libet if it isn't running")),
         ("quit", _("Exit Quod Libet")),
             ]:
         options.add(opt, help=help)
@@ -181,22 +117,22 @@ def process_arguments():
         ("repeat", _("Turn repeat off, on, or toggle it"), "0|1|t"),
         ("volume", _("Set the volume"), "(+|-|)0..100"),
         ("query", _("Search your audio library"), _("query")),
-        ("play-file", _("Play a file"), Q_("command|filename")),
+        ("play-file", _("Play a file"), C_("command", "filename")),
         ("set-rating", _("Rate the playing song"), "0.0..1.0"),
         ("set-browser", _("Set the current browser"), "BrowserName"),
         ("open-browser", _("Open a new browser"), "BrowserName"),
         ("queue", _("Show or hide the queue"), "on|off|t"),
         ("song-list", _("Show or hide the main song list"), "on|off|t"),
-        ("random", _("Filter on a random value"), Q_("command|tag")),
+        ("random", _("Filter on a random value"), C_("command", "tag")),
         ("filter", _("Filter on a tag value"), _("tag=value")),
         ("enqueue", _("Enqueue a file or query"), "%s|%s" % (
-            Q_("command|filename"), _("query"))),
+            C_("command", "filename"), _("query"))),
         ("enqueue-files", _("Enqueue comma-separated files"), "%s[,%s..]" % (
             _("filename"), _("filename"))),
         ("print-query", _("Print filenames of results of query to stdout"),
             _("query")),
         ("unqueue", _("Unqueue a file or query"), "%s|%s" % (
-            Q_("command|filename"), _("query"))),
+            C_("command", "filename"), _("query"))),
             ]:
         options.add(opt, help=help, arg=arg)
 
@@ -239,56 +175,73 @@ def process_arguments():
         "set-rating": is_float,
         }
 
+    cmds_todo = []
+
+    def queue(*args):
+        cmds_todo.append(args)
+
+    # XXX: to make startup work in case the desktop file isn't passed
+    # a file path/uri
+    if sys.argv[-1] == "--play-file":
+        sys.argv = sys.argv[:-1]
+
     opts, args = options.parse()
+
     for command, arg in opts.items():
         if command in controls:
-            control(command)
+            queue(command)
         elif command in controls_opt:
             if command in validators and not validators[command](arg):
                 print_e(_("Invalid argument for '%s'.") % command)
                 print_e(_("Try %s --help.") % sys.argv[0])
-                quodlibet.exit(True, notify_startup=True)
+                exit_(True, notify_startup=True)
             else:
-                control(command + " " + arg)
+                queue(command, arg)
         elif command == "status":
-            print_fifo("status")
+            queue("status")
         elif command == "print-playlist":
-            print_fifo("dump-playlist")
+            queue("dump-playlist")
         elif command == "print-queue":
-            print_fifo("dump-queue")
+            queue("dump-queue")
         elif command == "list-browsers":
-            print_fifo("dump-browsers")
+            queue("dump-browsers")
         elif command == "volume-up":
-            control("volume +")
+            queue("volume +")
         elif command == "volume-down":
-            control("volume -")
+            queue("volume -")
         elif command == "enqueue" or command == "unqueue":
             try:
                 filename = URI(arg).filename
             except ValueError:
                 filename = arg
-            control(command + " " + filename)
+            queue(command, filename)
         elif command == "enqueue-files":
-            control(command + " " + arg)
+            queue(command, arg)
         elif command == "play-file":
             try:
                 filename = URI(arg).filename
             except ValueError:
                 filename = os.path.abspath(util.path.expanduser(arg))
-            if os.path.isdir(filename):
-                control("add-directory " + filename)
-            else:
-                control("add-file " + filename)
+            queue("play-file", filename)
         elif command == "print-playing":
             try:
-                print_playing(args[0])
+                queue("print-playing", args[0])
             except IndexError:
-                print_playing()
+                queue("print-playing")
         elif command == "print-query":
-            print_query(arg)
+            queue(command, arg)
         elif command == "start-playing":
-            global play
-            play = True
+            actions.append(command)
         elif command == "no-plugins":
-            global no_plugins
-            no_plugins = True
+            actions.append(command)
+        elif command == "run":
+            actions.append(command)
+
+    if cmds_todo:
+        for cmd in cmds_todo:
+            control(*cmd, **{"ignore_error": "run" in actions})
+    else:
+        # this will exit if it succeeds
+        control('focus', ignore_error=True)
+
+    return actions, cmds_todo

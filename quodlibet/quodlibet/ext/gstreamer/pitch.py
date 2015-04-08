@@ -5,13 +5,19 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
+import os
+
 from gi.repository import Gtk, GObject, Gst
 
-from quodlibet.plugins import PluginImportException
+from quodlibet.plugins import PluginImportException, PluginNotSupportedError
 from quodlibet.plugins.gstelement import GStreamerPlugin
 from quodlibet import qltk
 from quodlibet import config
-from quodlibet.util import gobject_weak
+
+
+if os.name == "nt":
+    # https://github.com/quodlibet/quodlibet/issues/1534
+    raise PluginNotSupportedError("Crashes under Windows...")
 
 
 _PLUGIN_ID = "pitch"
@@ -49,7 +55,7 @@ class Preferences(Gtk.VBox):
     def __init__(self):
         super(Preferences, self).__init__(spacing=12)
 
-        table = Gtk.Table(3, 2)
+        table = Gtk.Table(n_rows=3, n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
 
@@ -70,7 +76,8 @@ class Preferences(Gtk.VBox):
             self.emit("changed")
 
         for idx, key in enumerate(["tempo", "rate", "pitch"]):
-            scale = Gtk.HScale(adjustment=Gtk.Adjustment(0, 0.1, 3, 0.1, 1))
+            scale = Gtk.HScale(
+                adjustment=Gtk.Adjustment.new(0, 0.1, 3, 0.1, 1, 0))
             scale.set_digits(2)
             scale.add_mark(1.0, Gtk.PositionType.BOTTOM, None)
             labels[key].set_mnemonic_widget(scale)
@@ -86,7 +93,7 @@ class Preferences(Gtk.VBox):
 class Pitch(GStreamerPlugin):
     PLUGIN_ID = _PLUGIN_ID
     PLUGIN_NAME = _("Audio Pitch / Speed")
-    PLUGIN_DESC = _("Control the pitch of an audio stream.")
+    PLUGIN_DESC = _("Controls the pitch of an audio stream.")
     PLUGIN_ICON = "audio-volume-high"
 
     @classmethod
@@ -101,7 +108,7 @@ class Pitch(GStreamerPlugin):
     @classmethod
     def PluginPreferences(cls, window):
         prefs = Preferences()
-        gobject_weak(prefs.connect, "changed", lambda *x: cls.queue_update())
+        prefs.connect("changed", lambda *x: cls.queue_update())
         return prefs
 
 

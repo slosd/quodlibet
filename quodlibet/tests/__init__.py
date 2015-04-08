@@ -7,6 +7,7 @@ import sys
 import unittest
 import tempfile
 import shutil
+import subprocess
 from quodlibet.util.dprint import Colorise, print_
 from quodlibet.util.path import fsnative, is_fsnative
 
@@ -48,6 +49,8 @@ def skip(cls, reason=None, warn=True):
 
 def skipUnless(value, *args, **kwargs):
     def dec(cls):
+        assert inspect.isclass(cls)
+
         if value:
             return cls
         return skip(cls, *args, **kwargs)
@@ -59,6 +62,9 @@ def skipIf(value, *args, **kwargs):
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data")
+if os.name == "nt":
+    DATA_DIR = DATA_DIR.decode("ascii")
+assert is_fsnative(DATA_DIR)
 _TEMP_DIR = None
 
 
@@ -86,6 +92,38 @@ def mkstemp(*args, **kwargs):
     return (fd, filename)
 
 
+def init_fake_app():
+    from quodlibet import app
+
+    from quodlibet import browsers
+    from quodlibet.player.nullbe import NullPlayer
+    from quodlibet.library.libraries import SongFileLibrary
+    from quodlibet.library.librarians import SongLibrarian
+    from quodlibet.qltk.quodlibetwindow import QuodLibetWindow
+    from quodlibet.util.cover import CoverManager
+
+    browsers.init()
+    app.name = "Quod Libet"
+    app.id = "quodlibet"
+    app.player = NullPlayer()
+    app.library = SongFileLibrary()
+    app.library.librarian = SongLibrarian()
+    app.cover_manager = CoverManager()
+    app.window = QuodLibetWindow(app.library, app.player, headless=True)
+
+
+def destroy_fake_app():
+    from quodlibet import app
+
+    app.window.destroy()
+    app.library.destroy()
+    app.library.librarian.destroy()
+    app.player.destroy()
+
+    app.window = app.library = app.player = app.name = app.id = None
+    app.cover_manager = None
+
+
 class Result(unittest.TestResult):
     TOTAL_WIDTH = 80
     TEST_RESULTS_WIDTH = 50
@@ -95,14 +133,15 @@ class Result(unittest.TestResult):
 
     CHAR_SUCCESS, CHAR_ERROR, CHAR_FAILURE = '+', 'E', 'F'
 
-    def __init__(self, test_name, num_tests, out=sys.stdout):
+    def __init__(self, test_name, num_tests, out=sys.stdout, failfast=False):
         super(Result, self).__init__()
         self.out = out
+        self.failfast = failfast
         if hasattr(out, "flush"):
             out.flush()
         pref = '%s (%d): ' % (Colorise.bold(test_name), num_tests)
         line = pref + " " * (self.TEST_NAME_WIDTH - len(test_name)
-                             - 6 - int(num_tests and log(num_tests, 10) or 0))
+                             - 7 - int(num_tests and log(num_tests, 10) or 0))
         print_(line, end="")
 
     def addSuccess(self, test):
@@ -139,18 +178,60 @@ class Result(unittest.TestResult):
 
 class Runner(object):
 
-    def run(self, test):
+    def run(self, test, failfast=False):
         suite = unittest.makeSuite(test)
-        result = Result(test.__name__, len(suite._tests))
+        result = Result(test.__name__, len(suite._tests), failfast=failfast)
         suite(result)
         result.printErrors()
         return len(result.failures), len(result.errors)
 
 
-def unit(run=[], filter_func=None, main=False, subdirs=None, strict=False,
-         stop_first=False):
+def unit(*args, **kwargs):
 
     global _TEMP_DIR
+
+    # create a user dir in /tmp and set env vars
+    _TEMP_DIR = tempfile.mkdtemp(prefix=fsnative(u"QL-TEST-"))
+
+    # needed for dbus/dconf
+    runtime_dir = tempfile.mkdtemp(prefix=fsnative(u"RUNTIME-"), dir=_TEMP_DIR)
+    os.chmod(runtime_dir, 0700)
+    os.environ["XDG_RUNTIME_DIR"] = runtime_dir
+
+    # set HOME and remove all XDG vars that default to it if not set
+    home_dir = tempfile.mkdtemp(prefix=fsnative(u"HOME-"), dir=_TEMP_DIR)
+    os.environ["HOME"] = home_dir
+    os.environ.pop("XDG_DATA_HOME", None)
+    os.environ.pop("XDG_CACHE_HOME", None)
+
+    bus = None
+    if os.name != "nt" and "DBUS_SESSION_BUS_ADDRESS" in os.environ:
+        try:
+            out = subprocess.check_output(["dbus-launch"])
+        except (subprocess.CalledProcessError, OSError):
+            pass
+        else:
+            bus = dict([l.split("=", 1) for l in out.splitlines()])
+            os.environ.update(bus)
+
+    try:
+        return _run_tests(*args, **kwargs)
+    finally:
+        try:
+            shutil.rmtree(_TEMP_DIR)
+        except EnvironmentError:
+            pass
+
+        if bus:
+            try:
+                subprocess.check_call(
+                    ["kill", "-9", bus["DBUS_SESSION_BUS_PID"]])
+            except (subprocess.CalledProcessError, OSError):
+                pass
+
+
+def _run_tests(run=[], filter_func=None, main=False, subdirs=None,
+               strict=False, stop_first=False):
 
     # Ideally nothing should touch the FS on import, but we do atm..
     # Get rid of all modules so QUODLIBET_USERDIR gets used everywhere.
@@ -158,19 +239,12 @@ def unit(run=[], filter_func=None, main=False, subdirs=None, strict=False,
         if key.startswith('quodlibet'):
             del(sys.modules[key])
 
-    # create a user dir in /tmp
-    _TEMP_DIR = tempfile.mkdtemp(prefix=fsnative("QL-TEST-"))
-    user_dir = tempfile.mkdtemp(prefix=fsnative("QL-USER-"), dir=_TEMP_DIR)
-    os.environ['QUODLIBET_USERDIR'] = user_dir
-
     path = os.path.dirname(__file__)
     if subdirs is None:
         subdirs = []
 
     import quodlibet
-    quodlibet._dbus_init()
-    quodlibet._gtk_init()
-    quodlibet._python_init()
+    quodlibet.init()
 
     # make glib warnings fatal
     if strict:
@@ -199,6 +273,10 @@ def unit(run=[], filter_func=None, main=False, subdirs=None, strict=False,
             if fnmatch.fnmatch(name, "test_*.py"):
                 mod = __import__(".".join([__name__, name[:-3]]), {}, {}, [])
                 discover_tests(getattr(mod, name[:-3]))
+
+    if main:
+        # include plugin tests by default
+        subdirs = (subdirs or []) + ["plugin"]
 
     for subdir in subdirs:
         sub_path = os.path.join(path, subdir)
@@ -229,19 +307,6 @@ def unit(run=[], filter_func=None, main=False, subdirs=None, strict=False,
 
     import quodlibet.config
 
-    # emulate python2.7 behavior
-    def setup_test(test):
-        if hasattr(TestCase, "setUpClass"):
-            return
-        if hasattr(test, "setUpClass"):
-            test.setUpClass()
-
-    def teardown_test(test):
-        if hasattr(TestCase, "setUpClass"):
-            return
-        if hasattr(test, "tearDownClass"):
-            test.tearDownClass()
-
     runner = Runner()
     failures = errors = 0
     use_suites = filter(filter_func, suites)
@@ -249,18 +314,11 @@ def unit(run=[], filter_func=None, main=False, subdirs=None, strict=False,
         if (not run
                 or test.__name__ in run
                 or test.__module__[11:] in run):
-            setup_test(test)
-            df, de = runner.run(test)
+            df, de = runner.run(test, failfast=stop_first)
             if stop_first and (df or de):
                 break
             failures += df
             errors += de
-            teardown_test(test)
             quodlibet.config.quit()
-
-    try:
-        shutil.rmtree(_TEMP_DIR)
-    except EnvironmentError:
-        pass
 
     return failures, errors

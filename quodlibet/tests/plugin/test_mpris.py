@@ -1,26 +1,30 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012,2013 Christoph Reiter <reiter.christoph@gmail.com>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of version 2 of the GNU General Public License as
 # published by the Free Software Foundation.
 
-from gi.repository import Gtk
-import dbus
+try:
+    import dbus
+except ImportError:
+    dbus = None
 
-from tests.plugin import PluginTestCase
+from gi.repository import Gtk
+
+from tests import skipUnless
+from tests.plugin import PluginTestCase, init_fake_app, destroy_fake_app
 
 from quodlibet.formats._audio import AudioFile
+from quodlibet.util.path import fsnative
 from quodlibet import config
-from quodlibet.qltk.quodlibetwindow import QuodLibetWindow
-from quodlibet import library
-from quodlibet import browsers
-from quodlibet import player
 from quodlibet import app
 
 
 A1 = AudioFile(
         {'album': u'greatness', 'title': 'excellent', 'artist': 'fooman\ngo',
-         '~#lastplayed': 1234, '~#rating': 0.75, '~filename': '/foo a/b',
+         '~#lastplayed': 1234, '~#rating': 0.75,
+         '~filename': fsnative(u'/foo a/b'),
          "~#length": 123, "albumartist": "aa\nbb", "bpm": "123.5",
          "tracknumber": "6/7"})
 A1.sanitize()
@@ -28,29 +32,35 @@ A1.sanitize()
 A2 = AudioFile(
         {'album': u'greatness2\ufffe', 'title': 'superlative',
          'artist': u'fooman\ufffe', '~#lastplayed': 1234, '~#rating': 1.0,
-         '~filename': '/foo'})
+         '~filename': fsnative(u'/foo')})
 A2.sanitize()
 
 
+@skipUnless(dbus, "no dbus")
 class TMPRIS(PluginTestCase):
-    @classmethod
-    def setUpClass(cls):
-        config.init()
-        browsers.init()
-        backend = player.init("nullbe")
-
-        app.library = library.init()
-        app.player = backend.init(app.librarian)
-        app.window = QuodLibetWindow(app.library, app.player, headless=True)
-
-        cls.plugin = cls.plugins["mpris"].cls
 
     def setUp(self):
+        self.plugin = self.plugins["mpris"].cls
+
+        config.init()
+        init_fake_app()
+
         app.window.songlist.set_songs([A1, A2])
         app.player.go_to(None)
         self.m = self.plugin()
         self.m.enabled()
         self._replies = []
+
+    def tearDown(self):
+        bus = dbus.SessionBus()
+        self.failUnless(
+            bus.name_has_owner("org.mpris.quodlibet"))
+        self.m.disabled()
+        self.failIf(bus.name_has_owner("org.mpris.quodlibet"))
+
+        destroy_fake_app()
+        config.quit()
+        del self.m
 
     def test_name_owner(self):
         bus = dbus.SessionBus()
@@ -159,6 +169,8 @@ class TMPRIS(PluginTestCase):
 
         self._prop().Get(piface, "Metadata", **args)
         resp = self._wait()[0]
+        self.failIfEqual(resp["mpris:trackid"],
+                         "/net/sacredchao/QuodLibet/NoTrack")
 
         # mpris stuff
         self.failIf(resp["mpris:trackid"].startswith("/org/mpris/"))
@@ -201,16 +213,3 @@ class TMPRIS(PluginTestCase):
         resp = self._wait()[0]
         self.failUnlessEqual(resp["xesam:album"], u'greatness2\ufffd')
         self.failUnlessEqual(resp["xesam:artist"], [u'fooman\ufffd'])
-
-    def tearDown(self):
-        bus = dbus.SessionBus()
-        self.failUnless(
-            bus.name_has_owner("org.mpris.quodlibet"))
-        self.m.disabled()
-        self.failIf(bus.name_has_owner("org.mpris.quodlibet"))
-        del self.m
-
-    @classmethod
-    def tearDownClass(cls):
-        app.window.destroy()
-        config.quit()

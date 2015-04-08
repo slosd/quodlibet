@@ -1,16 +1,17 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
-from gi.repository import Gtk
-
 from tests import TestCase, skipUnless, AbstractTestCase
 
 from quodlibet import player
 from quodlibet import library
 from quodlibet import config
+from quodlibet.util.path import fsnative
+from quodlibet.util import connect_obj
 from quodlibet.player.nullbe import NullPlayer
 from quodlibet.formats._audio import AudioFile
 from quodlibet.qltk.songmodel import PlaylistModel
@@ -18,11 +19,14 @@ from quodlibet.qltk.controls import Volume
 
 
 FILES = [
-    AudioFile({"~filename": "/foo/bar1", "title": "1"}),
-    AudioFile({"~filename": "/foo/bar2", "title": "2"})
+    AudioFile({"~filename": fsnative(u"/foo/bar1"), "title": "1"}),
+    AudioFile({"~filename": fsnative(u"/foo/bar2"), "title": "2"}),
+    AudioFile({"~filename": fsnative(u"/foo/bar3"), "title": "3"}),
 ]
 for file_ in FILES:
     file_.sanitize()
+
+UNKNOWN_FILE = FILES.pop(-1)
 
 
 class TPlayer(AbstractTestCase):
@@ -36,16 +40,41 @@ class TPlayer(AbstractTestCase):
         self.player = module.init(lib.librarian)
         source = PlaylistModel()
         source.set(FILES)
+
+        self.events = []
+
+        def start_end_handler(player, song, *args):
+            self.events.append((args[-1], song))
+
+        self.player.connect("song-started", start_end_handler, "started")
+        self.player.connect("song-ended", start_end_handler, "ended")
+
         self.player.setup(source, None, 0)
 
+        self.signals = []
+
+        def handler(type_, *args):
+            self.signals.append(type_)
+        connect_obj(self.player, "unpaused", handler, "unpaused")
+        connect_obj(self.player, "paused", handler, "paused")
+
+    def _check_events(self):
+        # make sure song-started and song-ended match up
+        stack = []
+        old = self.events[:]
+        for type_, song in self.events:
+            if type_ == "started":
+                stack.append(song)
+            elif type_ == "ended":
+                self.assertTrue(stack.pop(-1) is song, msg=old)
+        self.assertFalse(stack, msg=old)
+
     def tearDown(self):
-        import __builtin__
-        pw = print_w
-        __builtin__.__dict__["print_w"] = lambda *x: None
         self.player.destroy()
-        while Gtk.events_pending():
-            Gtk.main_iteration()
-        __builtin__.__dict__["print_w"] = pw
+
+        self._check_events()
+        del self.events
+        del self.signals
         config.quit()
 
     def test_song_start(self):
@@ -56,6 +85,7 @@ class TPlayer(AbstractTestCase):
         self.assertTrue(self.player.paused)
         self.player.paused = False
         self.assertFalse(self.player.paused)
+        self.assertTrue(self.signals, ["unpaused"])
 
     def test_volume(self):
         self.assertEqual(self.player.volume, 1.0)
@@ -99,6 +129,14 @@ class TPlayer(AbstractTestCase):
         self.player.go_to(FILES[0], explicit=True)
         self.assertEqual(self.player.song, FILES[0])
 
+    def test_goto_unknown(self):
+        self.assertTrue(self.player.paused)
+        self.player.go_to(UNKNOWN_FILE, True)
+        self.assertIs(self.player.song, UNKNOWN_FILE)
+        self.assertTrue(self.player.paused)
+        self.player.go_to(None)
+        self.assertIs(self.player.song, None)
+
     def test_reset(self):
         self.player.go_to(None)
         self.player.reset()
@@ -112,6 +150,15 @@ class TPlayer(AbstractTestCase):
         self.player.eq_values
         self.player.eq_values = [1, 2, 3, 4]
         self.player.next()
+
+    def test_unpause_while_no_song(self):
+        self.assertTrue(self.player.paused)
+        self.player.go_to(None)
+        self.player.paused = False
+        self.player.next()
+        self.assertTrue(self.signals, ["unpaused"])
+        self.player.go_to(None)
+        self.assertTrue(self.signals, ["unpaused", "paused"])
 
 
 class TNullPlayer(TPlayer):

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012,2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -5,26 +6,21 @@
 # published by the Free Software Foundation
 
 import os
-import subprocess
-import imp
-import shutil
 import sys
+import shutil
 
 from tests import TestCase, DATA_DIR, mkstemp
 from helper import capture_output
 
-import quodlibet
 from quodlibet import config
 from quodlibet.formats import MusicFile
+from quodlibet.operon.main import _main as operon_main
 
 
 def call(args=None):
-    path = os.path.join(os.path.dirname(quodlibet.__path__[0]), "operon.py")
-    mod = imp.load_source("operon", path)
-
     with capture_output() as (out, err):
         try:
-            return_code = mod.run(["operon.py"] + args)
+            return_code = operon_main(["operon.py"] + args)
         except SystemExit, e:
             return_code = e.code
 
@@ -64,7 +60,7 @@ class TOperonBase(TestCase):
 
     def _check(self, args, success, so, se):
         s, o, e = call(args)
-        self.failUnlessEqual(s == 0, success, msg=repr(s))
+        self.failUnlessEqual(s == 0, success, msg=repr((s, o, e)))
         self.failUnlessEqual(bool(o), so, msg=repr(o))
         self.failUnlessEqual(bool(e), se, msg=repr(e))
         return o, e
@@ -80,7 +76,7 @@ class TOperonMain(TOperonBase):
 
         # TODO: "image-extract", "rename", "fill", "fill-tracknumber", "edit"
         # "load"
-        for sub in ["help", "dump", "copy", "set", "clear",
+        for sub in ["help", "copy", "set", "clear",
                     "remove", "add", "list", "print", "info", "tags"]:
             self.check_true(["help", sub], True, False)
 
@@ -284,20 +280,6 @@ class TOperonSet(TOperonBase):
         self.failUnlessEqual(self.s["artist"], "foobar")
 
 
-class TOperonDump(TOperonBase):
-    def test_misc(self):
-        self.check_true(["dump", "-h"], True, False)
-        self.check_false(["dump"], False, True)
-        self.check_true(["dump", self.f], True, False)
-        self.check_true(["-v", "dump", self.f], True, True)
-        self.check_false(["dump", self.f, self.f], False, True)
-
-    def test_output(self):
-        o, e = self.check_true(["dump", self.f], True, False)
-        internal = filter(lambda x: x.startswith("~"), o.splitlines())
-        self.failIf(internal)
-
-
 class TOperonCopy(TOperonBase):
     # [--dry-run] [--ignore-errors] <source> <dest>
 
@@ -339,6 +321,72 @@ class TOperonCopy(TOperonBase):
         self.check_true(["copy", "--dry-run", self.f, self.f2], False, True)
         self.s2.reload()
         self.failIf(self.s2.realkeys())
+
+
+class TOperonEdit(TOperonBase):
+    # [--dry-run] <file>
+
+    def test_misc(self):
+        self.check_false(["edit"], False, True)
+        self.check_true(["edit", "-h"], True, False)
+        self.check_false(["edit", "foo", "bar"], False, True)
+
+    def test_nonexist_editor(self):
+        editor = "/this/path/does/not/exist/hopefully"
+        os.environ["VISUAL"] = editor
+        e = self.check_false(["edit", self.f], False, True)[1]
+        self.assertTrue(editor in e)
+
+    def test_no_edit(self):
+        if os.name == "nt":
+            return
+
+        os.environ["VISUAL"] = "touch -t 197001010101"
+        realitems = lambda s: [(k, s[k]) for k in s.realkeys()]
+        old_items = realitems(self.s)
+        self.check_true(["edit", self.f], False, False)
+        self.s.reload()
+        self.assertEqual(sorted(old_items), sorted(realitems(self.s)))
+
+    def test_mtime(self):
+        if os.name == "nt":
+            return
+
+        os.environ["VISUAL"] = "true"
+        self.check_false(["edit", self.f], False, True)
+        os.environ["VISUAL"] = "false"
+        self.check_false(["edit", self.f], False, True)
+
+    def test_dry_run(self):
+        if os.name == "nt" or sys.platform == "darwin":
+            return
+
+        realitems = lambda s: [(k, s[k]) for k in s.realkeys()]
+
+        os.environ["VISUAL"] = "truncate -s 0"
+        old_items = realitems(self.s)
+        os.utime(self.f, (42, 42))
+        e = self.check_true(["edit", "--dry-run", self.f], False, True)[1]
+
+        # log all removals
+        for key in self.s.realkeys():
+            self.assertTrue(key in e)
+
+        # nothing should have changed
+        self.s.reload()
+        self.assertEqual(sorted(old_items), sorted(realitems(self.s)))
+
+    def test_remove_all(self):
+        if os.name == "nt" or sys.platform == "darwin":
+            return
+
+        os.environ["VISUAL"] = "truncate -s 0"
+        os.utime(self.f, (42, 42))
+        self.check_true(["edit", self.f], False, False)
+
+        # all should be gone
+        self.s.reload()
+        self.assertFalse(self.s.realkeys())
 
 
 class TOperonInfo(TOperonBase):
@@ -561,3 +609,41 @@ class TOperonImageClear(TOperonBase):
         self.cover.reload()
         images = self.cover.get_images()
         self.assertEqual(len(images), 0)
+
+
+class TOperonFill(TOperonBase):
+    # [--dry-run] <pattern> <file> [<files>]
+
+    def test_misc(self):
+        self.check_true(["fill", "-h"], True, False)
+        self.check_false(["fill", self.f], False, True)
+        self.check_true(["fill", "foo", self.f2], False, False)
+        self.check_true(["fill", "foo", self.f, self.f2], False, False)
+
+    def test_apply(self):
+        basename = self.s("~basename")
+        self.check_true(["fill", "<title>", self.f], False, False)
+        self.s.reload()
+        self.assertEqual(self.s("title"), os.path.splitext(basename)[0])
+
+    def test_apply_no_match(self):
+        old_title = self.s("title")
+        self.check_true(
+            ["fill", "<tracknumber>. <title>", self.f], False, False)
+        self.s.reload()
+        self.assertEqual(self.s("title"), old_title)
+
+    def test_preview(self):
+        o, e = self.check_true(
+            ["fill", "--dry-run", "<title>", self.f], True, False)
+
+        self.assertTrue("title" in o)
+        self.assertTrue(self.s("~basename") in o)
+
+    def test_preview_no_match(self):
+        o, e = self.check_true(
+            ["fill", "--dry-run", "<tracknumber>. <title>", self.f],
+            True, False)
+
+        self.assertTrue("title" in o)
+        self.assertTrue(self.s("~basename") in o)

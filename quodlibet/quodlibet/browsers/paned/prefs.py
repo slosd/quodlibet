@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -14,6 +15,7 @@ from quodlibet.qltk.tagscombobox import TagsComboBoxEntry
 from quodlibet.qltk.x import SymbolicIconImage, MenuItem
 from quodlibet.qltk.menubutton import MenuButton
 from quodlibet.qltk.ccb import ConfigCheckMenuItem
+from quodlibet.util import connect_obj
 
 from .util import get_headers, save_headers
 
@@ -99,7 +101,8 @@ class PatternEditor(Gtk.VBox):
         column = Gtk.TreeViewColumn(None, render, text=0)
         view.append_column(column)
 
-    def __get_headers(self):
+    @property
+    def headers(self):
         for button in self.__headers.iterkeys():
             if button.get_active():
                 if button == self.__custom:
@@ -107,7 +110,8 @@ class PatternEditor(Gtk.VBox):
                     self.__headers[self.__custom] = model_headers
                 return self.__headers[button]
 
-    def __set_headers(self, new_headers):
+    @headers.setter
+    def headers(self, new_headers):
         for button, headers in self.__headers.iteritems():
             if headers == new_headers:
                 button.set_active(True)
@@ -116,8 +120,6 @@ class PatternEditor(Gtk.VBox):
         else:
             self.__headers[self.__custom] = new_headers
             self.__custom.set_active(True)
-
-    headers = property(__get_headers, __set_headers)
 
     def __selection_changed(self, selection, remove):
         remove.set_sensitive(bool(selection.get_selected()[1]))
@@ -180,7 +182,7 @@ class Preferences(qltk.UniqueWindow):
         super(Preferences, self).__init__()
 
         self.set_transient_for(qltk.get_top_parent(browser))
-        self.set_default_size(350, 270)
+        self.set_default_size(350, 300)
         self.set_border_width(12)
 
         self.set_title(_("Paned Browser Preferences") + " - Quod Libet")
@@ -191,27 +193,25 @@ class Preferences(qltk.UniqueWindow):
         editor.headers = get_headers()
 
         apply_ = Gtk.Button(stock=Gtk.STOCK_APPLY)
-        apply_.connect_object("clicked", self.__apply, editor, browser, False)
+        connect_obj(apply_, "clicked", self.__apply, editor, browser, False)
 
         cancel = Gtk.Button(stock=Gtk.STOCK_CANCEL)
         cancel.connect("clicked", lambda x: self.destroy())
-
-        ok = Gtk.Button(stock=Gtk.STOCK_OK)
-        ok.connect_object("clicked", self.__apply, editor, browser, True)
 
         box = Gtk.HButtonBox()
         box.set_spacing(6)
         box.set_layout(Gtk.ButtonBoxStyle.END)
         box.pack_start(apply_, True, True, 0)
-        box.pack_start(cancel, True, True, 0)
-        box.pack_start(ok, True, True, 0)
+        self.use_header_bar()
+        if not self.has_close_button():
+            box.pack_start(cancel, True, True, 0)
 
         vbox.pack_start(editor, True, True, 0)
         vbox.pack_start(box, False, True, 0)
 
         self.add(vbox)
 
-        ok.grab_focus()
+        cancel.grab_focus()
         self.get_child().show_all()
 
     def __apply(self, editor, browser, close):

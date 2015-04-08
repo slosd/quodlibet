@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -114,5 +115,5 @@ class TCollectionBrowser(TestCase):
 
     def test_init(self):
         library = SongLibrary()
-        x = CollectionBrowser(library, False)
+        x = CollectionBrowser(library)
         x.destroy()

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Automatic library update plugin
 #
 # (c) 2009 Joe Higton
@@ -8,7 +9,9 @@
 # published by the Free Software Foundation
 
 import os
-if os.name == "nt":
+import sys
+
+if os.name == "nt" or sys.platform == "darwin":
     from quodlibet.plugins import PluginNotSupportedError
     raise PluginNotSupportedError
 
@@ -114,9 +117,9 @@ class LibraryEvent(ProcessEvent):
 
 class AutoLibraryUpdate(EventPlugin):
     PLUGIN_ID = "Automatic library update"
-    PLUGIN_DESC = _("Keep your library up to date with inotify. "
+    PLUGIN_NAME = _("Automatic Library Update")
+    PLUGIN_DESC = _("Keeps your library up to date with inotify. "
                     "Requires %s.") % "pyinotify"
-    PLUGIN_VERSION = "0.4"
 
     # TODO: make a config option
     USE_THREADS = True

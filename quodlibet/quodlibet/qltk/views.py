@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig, Michael Urman
 #           2012, 2013 Christoph Reiter
 #
@@ -5,6 +6,7 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
+import os
 import contextlib
 from cStringIO import StringIO
 
@@ -12,7 +14,9 @@ from gi.repository import Gtk, Gdk, GObject, Pango, GLib
 import cairo
 
 from quodlibet import config
-from quodlibet.qltk import get_top_parent, is_accel, is_wayland, gtk_version
+from quodlibet.qltk import get_top_parent, is_accel, is_wayland, gtk_version, \
+    menu_popup
+from quodlibet.qltk.image import get_scale_factor
 
 
 class TreeViewHints(Gtk.Window):
@@ -71,6 +75,7 @@ class TreeViewHints(Gtk.Window):
         self.set_name("gtk-tooltip")
         if gtk_version < (3, 13):
             self.set_border_width(1)
+
         self.connect('leave-notify-event', self.__undisplay)
 
         self.__handlers = {}
@@ -140,13 +145,32 @@ class TreeViewHints(Gtk.Window):
             self.__undisplay()
             return False
 
+        x, y = map(int, [event.x, event.y])
+
+        # For gtk3.16 overlay scrollbars: if our event x coordinate
+        # is contained in the scrollbar, hide the tooltip. Unlike other
+        # hiding events we don't want to send a leave event to the scrolled
+        # window so the overlay scrollbar does't hide and can be interacted
+        # with.
+        parent = view.get_parent()
+        # We only need to check if the tooltip is there since events
+        # on the scrollbars don't get forwarded to us anyway.
+        if self.__view and parent and isinstance(parent, Gtk.ScrolledWindow):
+            vscrollbar = parent.get_vscrollbar()
+            res = vscrollbar.translate_coordinates(view, 0, 0)
+            if res is not None:
+                x_offset = res[0]
+                vbar_width = vscrollbar.get_allocation().width
+                if x_offset <= x <= x_offset + vbar_width:
+                    self.__undisplay(send_leave=False)
+                    return False
+
         # hide if any modifier is active
         if event.get_state() & Gtk.accelerator_get_default_mod_mask():
             self.__undisplay()
             return False
 
         # get the cell at the mouse position
-        x, y = map(int, [event.x, event.y])
         try:
             path, col, cellx, celly = view.get_path_at_pos(x, y)
         except TypeError:
@@ -217,7 +241,16 @@ class TreeViewHints(Gtk.Window):
 
         # Use the renderer padding as label padding so the text offset matches
         render_xpad = renderer.get_property("xpad")
-        label.set_padding(render_xpad, 0)
+
+        # the renderer xpad is not enough for the tooltip, especially with
+        # rounded corners the label gets nearly clipped.
+        MIN_HINT_X_PAD = 4
+        if render_xpad < MIN_HINT_X_PAD:
+            extra_xpad = MIN_HINT_X_PAD - render_xpad
+        else:
+            extra_xpad = 0
+
+        label.set_padding(render_xpad + extra_xpad, 0)
         set_text(clabel)
         clabel.set_padding(render_xpad, 0)
         label_width = clabel.get_layout().get_pixel_size()[0]
@@ -241,6 +274,7 @@ class TreeViewHints(Gtk.Window):
 
         # save for adjusting passthrough events
         self.__dx, self.__dy = col_area.x + render_offset, bg_area.y
+        self.__dx -= extra_xpad
         if expand_left:
             # shift to the left
             # FIXME: ellipsize start produces a space at the end depending
@@ -252,15 +286,17 @@ class TreeViewHints(Gtk.Window):
         y = oy + self.__dy
         x, y = view.convert_bin_window_to_widget_coords(x, y)
 
-        w = label_width
+        w = label_width + extra_xpad * 2
         h = bg_area.height
 
         if not is_wayland():
-            # clip if it's bigger than the screen
-            screen_border = 5  # leave some space
-
+            # clip if it's bigger than the monitor
+            mon_border = 5  # leave some space
+            screen = Gdk.Screen.get_default()
             if not expand_left:
-                space_right = Gdk.Screen.width() - x - w - screen_border
+                monitor_idx = screen.get_monitor_at_point(x, y)
+                mon = screen.get_monitor_geometry(monitor_idx)
+                space_right = mon.x + mon.width - x - w - mon_border
 
                 if space_right < 0:
                     w += space_right
@@ -268,7 +304,10 @@ class TreeViewHints(Gtk.Window):
                 else:
                     label.set_ellipsize(Pango.EllipsizeMode.NONE)
             else:
-                space_left = x - screen_border
+                monitor_idx = screen.get_monitor_at_point(x + w, y)
+                mon = screen.get_monitor_geometry(monitor_idx)
+                space_left = x - mon.x - mon_border
+
                 if space_left < 0:
                     x -= space_left
                     self.__dx -= space_left
@@ -309,9 +348,31 @@ class TreeViewHints(Gtk.Window):
 
         return False
 
-    def __undisplay(self, *args):
+    def __undisplay(self, *args, **kwargs):
         if not self.__view:
             return
+
+        send_leave = kwargs.pop("send_leave", True)
+
+        # XXXXXXXX!: for overlay scrollbars the parent scrolled window
+        # listens to notify-leave events to hide them. In case we show
+        # the tooltip and leave the SW through the tooltip the SW will never
+        # get an event and the scrollbar stays visible forever.
+        # This creates a half broken leave event which is just enough
+        # to make this work.
+        parent = self.__view.get_parent()
+        fake_event = None
+        if parent and isinstance(parent, Gtk.ScrolledWindow) and send_leave:
+            fake_event = Gdk.Event.new(Gdk.EventType.LEAVE_NOTIFY)
+            fake_event.any.window = parent.get_window()
+            struct = fake_event.crossing
+            struct.time = Gtk.get_current_event_time()
+            ok, state = Gtk.get_current_event_state()
+            if ok:
+                struct.state = state
+            device = Gtk.get_current_event_device()
+            if device is not None:
+                struct.set_device(device)
 
         if self.__current_renderer and self.__edit_id:
             self.__current_renderer.disconnect(self.__edit_id)
@@ -319,15 +380,24 @@ class TreeViewHints(Gtk.Window):
         self.__current_path = self.__current_col = None
         self.__view = None
 
-        def hide():
+        def hide(fake_event):
+            if fake_event is not None:
+                Gtk.main_do_event(fake_event)
+
             self.__hide_id = None
             self.hide()
             return False
 
-        # Work around Gnome Shell redraw bugs: it doesn't like
-        # multiple hide()/show(), so we try to reduce calls to hide
-        # by aborting it if the pointer is on a new cell shortly after.
-        self.__hide_id = GLib.timeout_add(20, hide)
+        if gtk_version < (3, 13):
+            # https://bugzilla.gnome.org/show_bug.cgi?id=731055
+            # Work around Gnome Shell redraw bugs: it doesn't like
+            # multiple hide()/show(), so we try to reduce calls to hide
+            # by aborting it if the pointer is on a new cell shortly after.
+            self.__hide_id = GLib.timeout_add(20, hide, fake_event)
+        else:
+            # mutter3.12 and gtk3.14 are a bit broken together, so it's safe
+            # to assume we have a fixed mutter release..
+            hide(fake_event)
 
     def __event(self, event):
         if not self.__view:
@@ -346,14 +416,21 @@ class TreeViewHints(Gtk.Window):
             # additional motion events.
             # Warning: this may result in motion events outside of the
             # view window.. ?
-            new_event = Gdk.Event()
-            new_event.type = Gdk.EventType.MOTION_NOTIFY
+            new_event = Gdk.Event.new(Gdk.EventType.MOTION_NOTIFY)
             struct = new_event.motion
             for attr in ["x", "y", "x_root", "y_root", "time", "window",
                          "state", "send_event"]:
                 setattr(struct, attr, getattr(event.crossing, attr))
-            struct.device = Gtk.get_current_event_device()
+            device = Gtk.get_current_event_device()
+            if device is not None:
+                struct.set_device(device)
             return new_event
+
+        # FIXME: We should translate motion events on the tooltip
+        # to crossing events for the underlying view.
+        # (I think, no tested) Currently the hover scrollbar stays visible
+        # if the mouse leaves the view through the tooltip without the
+        # knowledge of the view.
 
         type_ = event.type
         real_event = None
@@ -378,7 +455,7 @@ class TreeViewHints(Gtk.Window):
         # nobody else should tie to any TreeViewHints events ever.
         event.any.window = self.__view.get_bin_window()
 
-        event.put()
+        Gtk.main_do_event(event)
 
         return True
 
@@ -448,10 +525,12 @@ class DragScroll(object):
             # we have to re-add the timeout.. otherwise they could add up
             # because scroll can last longer than 50ms
             GLib.source_remove(self.__scroll_periodic)
+            self.__scroll_periodic = None
             enable_periodic_scroll()
 
         def enable_periodic_scroll():
             self.__scroll_periodic = GLib.timeout_add(50, periodic_scroll)
+            self.__scroll_delay = None
 
         self.__scroll_delay = GLib.timeout_add(350, enable_periodic_scroll)
 
@@ -674,14 +753,16 @@ class BaseView(Gtk.TreeView):
             column.set_sort_indicator(value)
 
 
-def _get_surface_size(surface):
+def _get_surface_size(surface, scale_factor):
     """Returns (width, height) of a surface or None."""
 
     # X11
     try:
-        return surface.get_width(), surface.get_height()
+        w, h = surface.get_width(), surface.get_height()
     except AttributeError:
         pass
+    else:
+        return w / scale_factor, h / scale_factor
 
     # Everything else: pycairo doesn't expose get_image() so we have
     # do it the ugly way through png
@@ -694,9 +775,11 @@ def _get_surface_size(surface):
         return
     else:
         try:
-            return image_surface.get_width(), image_surface.get_height()
+            w, h = image_surface.get_width(), image_surface.get_height()
         except AttributeError:
             pass
+        else:
+            return w / scale_factor, h / scale_factor
 
 
 class DragIconTreeView(BaseView):
@@ -735,7 +818,8 @@ class DragIconTreeView(BaseView):
         if not icons:
             return
 
-        sizes = [_get_surface_size(s) for s in icons]
+        scale_factor = get_scale_factor(self)
+        sizes = [_get_surface_size(s, scale_factor) for s in icons]
         if None in sizes:
             return
         width = max([s[0] for s in sizes])
@@ -743,7 +827,7 @@ class DragIconTreeView(BaseView):
 
         layout = None
         if len(paths) > max_rows:
-            more = _("and %d more...") % (len(paths) - max_rows)
+            more = _(u"and %d more…") % (len(paths) - max_rows)
             more = "<i>%s</i>" % more
             layout = self.create_pango_layout("")
             layout.set_markup(more)
@@ -753,7 +837,8 @@ class DragIconTreeView(BaseView):
             height += lh
             height += 6  # padding
 
-        surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+        surface = icons[0].create_similar(
+            cairo.CONTENT_COLOR_ALPHA, width, height)
         ctx = cairo.Context(surface)
 
         # render background
@@ -891,35 +976,55 @@ class RCMTreeView(BaseView):
         else:
             pos_func = None
 
-        menu.popup(None, None, pos_func, None, button, time)
+        # force attach the menu to the view
+        attached_widget = menu.get_attach_widget()
+        if attached_widget != self:
+            if attached_widget is not None:
+                menu.detach()
+            menu.attach_to_widget(self, None)
+
+        menu_popup(menu, None, None, pos_func, None, button, time)
         return True
 
     def __popup_position(self, menu, *args):
         path, col = self.get_cursor()
-        if col is None:
-            col = self.get_column(0)
 
         # get a rectangle describing the cell render area (assume 3 px pad)
         rect = self.get_cell_area(path, col)
-        rect.x += 3
-        rect.width -= 6
-        rect.y += 3
-        rect.height -= 6
-        dummy, dx, dy = self.get_window().get_origin()
-        dy += self.get_bin_window().get_position()[1]
+        padding = 3
+        rect.x += padding
+        rect.width = max(rect.width - padding * 2, 0)
+        rect.y += padding
+        rect.height = max(rect.height - padding * 2, 0)
 
-        # fit menu to screen, aligned per text direction
-        screen_width = Gdk.Screen.width()
-        screen_height = Gdk.Screen.height()
+        x, y = self.get_window().get_origin()[1:]
+        x, y = self.convert_bin_window_to_widget_coords(x + rect.x, y + rect.y)
+
         menu.realize()
         ma = menu.get_allocation()
-        menu_y = rect.y + rect.height + dy
-        if menu_y + ma.height > screen_height and rect.y + dy - ma.height > 0:
-            menu_y = rect.y + dy - ma.height
-        if Gtk.Widget.get_default_direction() == Gtk.TextDirection.LTR:
-            menu_x = min(rect.x + dx, screen_width - ma.width)
+        menu_y = rect.height + y
+        if self.get_direction() == Gtk.TextDirection.LTR:
+            menu_x = x
         else:
-            menu_x = max(0, rect.x + dx - ma.width + rect.width)
+            menu_x = x - ma.width + rect.width
+
+        # on X11/win32 we can use the screen size
+        if not is_wayland():
+
+            # fit menu to screen, aligned per text direction
+            screen = self.get_screen()
+            screen_width = screen.get_width()
+            screen_height = screen.get_height()
+
+            # show above row if no space below and enough above
+            if menu_y + ma.height > screen_height and y - ma.height > 0:
+                menu_y = y - ma.height
+
+            # make sure it's not outside of the screen
+            if self.get_direction() == Gtk.TextDirection.LTR:
+                menu_x = max(0, min(menu_x, screen_width - ma.width))
+            else:
+                menu_x = min(max(0, menu_x), screen_width)
 
         return (menu_x, menu_y, True)  # x, y, move_within_screen
 
@@ -930,18 +1035,97 @@ class HintedTreeView(BaseView):
 
     def __init__(self, *args, **kwargs):
         super(HintedTreeView, self).__init__(*args, **kwargs)
-        if not config.state('disable_hints'):
+        if self.supports_hints():
             try:
                 tvh = HintedTreeView.hints
             except AttributeError:
                 tvh = HintedTreeView.hints = TreeViewHints()
             tvh.connect_view(self)
 
+    def supports_hints(self):
+        """If the treeview hints support is enabled. Can be used to
+        display scroll bars instead for example.
+        """
+
+        if "QUODLIBET_NO_HINTS" in os.environ:
+            return False
+
+        return not config.state('disable_hints')
+
+
+class _TreeViewColumnLabel(Gtk.Label):
+    """A label which fades  into the background at the end; for use
+    only in TreeViewColumns.
+
+    The hackery with using the parents allocation is needed because
+    the label always gets the allocation it has requested, ignoring
+    the actual width of the column header.
+    """
+
+    def do_draw(self, ctx):
+        # TODO: doesn't do anything in RTL mode
+
+        alloc = self.get_allocation()
+        # in case there are no parents use the same alloc which should
+        # result in no custom drawing.
+        p1 = self.get_parent() or self
+        p2 = p1.get_parent() or p1
+        p3 = p2.get_parent() or p2
+        p2_alloc = p2.get_allocation()
+        p3_alloc = p3.get_allocation()
+
+        available_width = p2_alloc.width
+        # remove the space needed by the arrow and add the space
+        # added by the padding so we only start drawing when we clip
+        # the text directly
+        available_width += (p2_alloc.x - alloc.x) + (p2_alloc.x - p3_alloc.x)
+
+        if alloc.width <= available_width:
+            return Gtk.Label.do_draw(self, ctx)
+
+        req_height = self.get_requisition().height
+        w, h = available_width, alloc.height
+
+        # possible when adding new columns.... create_similar will fail
+        # in this case below, so just skip.
+        if min(w, h) < 0:
+            return Gtk.Label.do_draw(self, ctx)
+
+        surface = ctx.get_target()
+
+        # draw label to image surface
+        label_surface = surface.create_similar(cairo.CONTENT_COLOR_ALPHA, w, h)
+        label_ctx = cairo.Context(label_surface)
+        res = Gtk.Label.do_draw(self, label_ctx)
+
+        # create a gradient.
+        # make the gradient width depend roughly on the font size
+        gradient_width = req_height * 0.8
+        gradient_x0 = w - min(float(gradient_width), w)
+
+        pat = cairo.LinearGradient(gradient_x0, 0, w, 0)
+        pat.add_color_stop_rgba(0, 1, 1, 1, 1)
+        pat.add_color_stop_rgba(w, 0, 0, 0, 0)
+
+        # gradient surface
+        grad_surface = surface.create_similar(cairo.CONTENT_COLOR_ALPHA, w, h)
+        imgctx = cairo.Context(grad_surface)
+        imgctx.set_source(pat)
+        imgctx.paint()
+
+        # draw label using the gradient as the alpha channel mask
+        ctx.save()
+        ctx.set_source_surface(label_surface)
+        ctx.mask_surface(grad_surface)
+        ctx.restore()
+
+        return res
+
 
 class TreeViewColumn(Gtk.TreeViewColumn):
     def __init__(self, title="", *args, **kwargs):
         super(TreeViewColumn, self).__init__(None, *args, **kwargs)
-        label = Gtk.Label(label=title)
+        label = _TreeViewColumnLabel(label=title)
         label.set_padding(1, 1)
         label.show()
         self.set_widget(label)

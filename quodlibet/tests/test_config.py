@@ -34,33 +34,6 @@ class Tconfig(TestCase):
         os.remove(filename)
         os.remove(invalid_filename)
 
-    def test_get_columns_migrates(self):
-        self.failIf(config.get("settings", "headers", None))
-        self.failIf(config.get("settings", "columns", None))
-
-        headers = "~album ~#replaygain_track_gain foobar"
-        config.set("settings", "headers", headers)
-        columns = config.get_columns(headers)
-        self.failUnlessEqual(columns, ["~album", "~#replaygain_track_gain",
-                                       "foobar"])
-        self.failIf(config.get("settings", "headers", None))
-
-    def test_get_set_columns(self):
-        self.failIf(config.get("settings", "headers", None))
-        self.failIf(config.get("settings", "columns", None))
-        columns = ["first", "won't", "two words", "4"]
-        config.set_columns(columns)
-        # First assume caching
-        self.failUnlessEqual(columns, config.get_columns())
-        # Then without
-        self.failUnlessEqual(columns, config.get_columns(refresh=True))
-        columns += ["~~another~one"]
-        # Test dirtying the cache
-        config.set_columns(columns)
-        self.failUnlessEqual(columns, config.get_columns())
-        self.failUnlessEqual(columns, config.get_columns(refresh=True))
-        self.failIf(config.get("settings", "headers", None))
-
     def tearDown(self):
         config.quit()
 

@@ -18,7 +18,6 @@ from quodlibet import config
 from quodlibet import formats
 from quodlibet import qltk
 
-from quodlibet import util
 from quodlibet.browsers._base import Browser
 from quodlibet.library import SongFileLibrary
 from quodlibet.qltk.filesel import MainDirectoryTree
@@ -29,6 +28,7 @@ from quodlibet.util.library import get_scan_dirs
 from quodlibet.util.dprint import print_d
 from quodlibet.util.uri import URI
 from quodlibet.util.path import normalize_path
+from quodlibet.util import connect_obj
 
 
 class FileSystem(Browser, Gtk.HBox):
@@ -39,11 +39,12 @@ class FileSystem(Browser, Gtk.HBox):
     name = _("File System")
     accelerated_name = _("_File System")
     priority = 10
+    uses_main_library = False
 
     TARGET_QL, TARGET_EXT = range(1, 3)
 
     def pack(self, songpane):
-        container = qltk.RHPaned()
+        container = qltk.ConfigRHPaned("browsers", "filesystem_pos", 0.4)
         container.pack1(self, True, False)
         container.pack2(songpane, True, False)
         return container
@@ -58,6 +59,9 @@ class FileSystem(Browser, Gtk.HBox):
 
     @classmethod
     def init(klass, library):
+        if klass.__library is not None:
+            return
+
         klass.__glibrary = library
         klass.__library = SongFileLibrary("filesystem")
         library.connect('added', klass.__remove_because_added)
@@ -67,7 +71,7 @@ class FileSystem(Browser, Gtk.HBox):
         songs = filter(klass.__library.__contains__, songs)
         klass.__library.remove(songs)
 
-    def __init__(self, library, main):
+    def __init__(self, library):
         super(FileSystem, self).__init__()
         sw = ScrolledWindow()
         sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -85,9 +89,8 @@ class FileSystem(Browser, Gtk.HBox):
 
         sel = dt.get_selection()
         sel.unselect_all()
-        sel.connect_object('changed', copool.add, self.__songs_selected, dt)
-        if main:
-            dt.connect('row-activated', lambda *a: self.emit("activated"))
+        connect_obj(sel, 'changed', copool.add, self.__songs_selected, dt)
+        dt.connect('row-activated', lambda *a: self.songs_activated())
         sw.add(dt)
         self.pack_start(sw, True, True, 0)
 
@@ -178,9 +181,8 @@ class FileSystem(Browser, Gtk.HBox):
     def activate(self):
         copool.add(self.__songs_selected, self.get_child())
 
-    def Menu(self, songs, songlist, library):
-        menu = SongsMenu(library, songs, remove=self.__remove_songs,
-                         delete=True, parent=self)
+    def Menu(self, songs, library, items):
+
         i = qltk.MenuItem(_("_Add to Library"), Gtk.STOCK_ADD)
         i.set_sensitive(False)
         i.connect('activate', self.__add_songs, songs)
@@ -188,8 +190,10 @@ class FileSystem(Browser, Gtk.HBox):
             if song not in self.__glibrary:
                 i.set_sensitive(True)
                 break
-        menu.preseparate()
-        menu.prepend(i)
+
+        items.append([i])
+        menu = SongsMenu(library, songs, remove=self.__remove_songs,
+                         delete=True, items=items)
         return menu
 
     def __add_songs(self, item, songs):
@@ -208,7 +212,7 @@ class FileSystem(Browser, Gtk.HBox):
         for dir in dirs:
             try:
                 for file in filter(formats.filter,
-                                   sorted(os.listdir(util.fsnative(dir)))):
+                                   sorted(os.listdir(dir))):
                     raw_path = os.path.join(dir, file)
                     fn = normalize_path(raw_path, canonicalise=True)
                     if fn in self.__glibrary:
@@ -237,6 +241,6 @@ class FileSystem(Browser, Gtk.HBox):
             yield True
         if self.get_window():
             self.get_window().set_cursor(None)
-        self.emit('songs-selected', songs, None)
+        self.songs_selected(songs)
 
 browsers = [FileSystem]

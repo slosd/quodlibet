@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -12,6 +13,7 @@ from quodlibet import qltk
 from quodlibet.qltk.views import AllTreeView, TreeViewColumn
 from quodlibet.qltk.songsmenu import SongsMenu
 from quodlibet.qltk import is_accel
+from quodlibet.util import connect_obj
 
 from .models import PaneModel
 from .util import PaneConfig
@@ -78,7 +80,7 @@ class Pane(AllTreeView):
         selection.set_mode(Gtk.SelectionMode.MULTIPLE)
         self.__sig = selection.connect('changed', self.__selection_changed)
         s = self.connect('popup-menu', self.__popup_menu, library)
-        self.connect_object('destroy', self.disconnect, s)
+        connect_obj(self, 'destroy', self.disconnect, s)
 
         targets = [
             ("text/x-quodlibet-songs", Gtk.TargetFlags.SAME_APP,
@@ -160,7 +162,7 @@ class Pane(AllTreeView):
 
     def __popup_menu(self, view, library):
         songs = self.__get_selected_songs(sort=True)
-        menu = SongsMenu(library, songs, parent=self)
+        menu = SongsMenu(library, songs)
         menu.show_all()
         return view.popup_menu(menu, 0, Gtk.get_current_event_time())
 

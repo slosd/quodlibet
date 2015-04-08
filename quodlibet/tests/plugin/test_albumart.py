@@ -1,10 +1,10 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of version 2 of the GNU General Public License as
 # published by the Free Software Foundation.
 
-from gi.repository import Gtk
 from quodlibet.formats._audio import AudioFile
 from quodlibet.qltk.cover import ALBUM_ART_PLUGIN_ID
 from tests.plugin import PluginTestCase
@@ -34,7 +34,7 @@ class TAlbumArt(PluginTestCase):
     def setUp(self):
         globals().update(vars(self.modules[ALBUM_ART_PLUGIN_ID]))
         self.songs = [A_SONG]
-        self.plugin = DownloadAlbumArt(self.songs, library, None)
+        self.plugin = DownloadAlbumArt(self.songs, library)
 
     def testAlbumArtWindow(self):
         win = AlbumArtWindow(self.songs)

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -7,14 +8,25 @@
 from tests.plugin import PluginTestCase
 
 from quodlibet import config
-from quodlibet import util
+from quodlibet.util.path import fsnative
 from quodlibet.formats._audio import AudioFile
 
 
 SONGS = [
-    AudioFile({"title": "one", "artist": "piman", "~filename": "/dev/null"}),
-    AudioFile({"title": u"\xf6\xe4\xfc", "~filename": "/dev/zero"}),
-    AudioFile({"title": "three", "artist": "boris", "~filename": "/bin/ls"})
+    AudioFile({
+        "title": "one",
+        "artist": "piman",
+        "~filename": fsnative(u"/dev/null"),
+    }),
+    AudioFile({
+        "title": u"\xf6\xe4\xfc",
+        "~filename": fsnative(u"/dev/zero"),
+    }),
+    AudioFile({
+        "title": "three",
+        "artist": "boris",
+        "~filename": fsnative(u"/bin/ls"),
+    }),
 ]
 
 for song in SONGS:

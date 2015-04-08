@@ -1,14 +1,27 @@
+# -*- coding: utf-8 -*-
 from tests import TestCase
+from helper import visible
 
-from quodlibet.qltk.entry import ValidatingEntry, UndoEntry
-from quodlibet.parse import Query
+from quodlibet.qltk.entry import ValidatingEntry, UndoEntry, Entry, \
+    QueryValidator
 import quodlibet.config
+
+
+class TEntry(TestCase):
+
+    def test_set_max_width_chars(self):
+        with visible(Entry()) as e:
+            e.set_max_width_chars(4)
+            nat1 = e.get_preferred_width()[1]
+            e.set_max_width_chars(40)
+            nat2 = e.get_preferred_width()[1]
+            self.assertTrue(nat1 < nat2)
 
 
 class TValidatingEntry(TestCase):
     def setUp(self):
         quodlibet.config.init()
-        self.entry = ValidatingEntry(Query.is_valid_color)
+        self.entry = ValidatingEntry(QueryValidator)
 
     def test_changed_simple(self):
         self.entry.set_text("valid")
@@ -18,6 +31,18 @@ class TValidatingEntry(TestCase):
 
     def test_changed_invalid(self):
         self.entry.set_text("=#invalid")
+
+    def test_custom_validator(self):
+        x = []
+
+        def valid(text):
+            x.append(text)
+            return text
+
+        entry = ValidatingEntry(valid)
+        entry.set_text("foo")
+        self.assertEqual(x, [u"foo"])
+        self.assertTrue(isinstance(x[0], unicode))
 
     def tearDown(self):
         self.entry.destroy()

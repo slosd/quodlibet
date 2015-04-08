@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig,
 #           2009,2012 Christoph Reiter
 #
@@ -10,14 +11,14 @@ from gi.repository import Gtk
 from quodlibet import util
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 from quodlibet.util.path import iscommand
+from quodlibet.util import connect_obj
 
 
 class BurnCD(SongsMenuPlugin):
     PLUGIN_ID = 'Burn CD'
     PLUGIN_NAME = _('Burn CD')
-    PLUGIN_DESC = 'Burn CDs with K3b or Brasero.'
+    PLUGIN_DESC = _('Burns CDs with K3b, Brasero or xfburn.')
     PLUGIN_ICON = 'gtk-cdrom'
-    PLUGIN_VERSION = '0.2'
 
     burn_programs = {
         'K3b': ['k3b', '--audiocd'],
@@ -35,11 +36,11 @@ class BurnCD(SongsMenuPlugin):
 
         submenu = Gtk.Menu()
         for (is_cmd, (name, (cmd, arg))) in progs:
-            item = Gtk.MenuItem(name)
+            item = Gtk.MenuItem(label=name)
             if not is_cmd:
                 item.set_sensitive(False)
             else:
-                item.connect_object('activate', self.__set, name)
+                connect_obj(item, 'activate', self.__set, name)
             submenu.append(item)
         self.set_submenu(submenu)
 

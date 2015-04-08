@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2012 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -6,31 +7,27 @@
 
 import __builtin__
 
-_dummy_gettext = lambda value: value
-_dummy_ngettext = lambda v1, v2, count: (count == 1) and v1 or v2
-__builtin__.__dict__["_"] = _dummy_gettext
-__builtin__.__dict__["Q_"] = _dummy_gettext
-__builtin__.__dict__["N_"] = _dummy_gettext
-__builtin__.__dict__["ngettext"] = _dummy_ngettext
-
 import gettext
 import locale
 import os
-import re
 import sys
 import warnings
 
 import quodlibet.const
 import quodlibet.util
 
-from quodlibet.util import load_library
+from quodlibet.util import set_process_title
 from quodlibet.util.path import mkdir, unexpand
-from quodlibet.util.i18n import GlibTranslations
+from quodlibet.util.i18n import GlibTranslations, set_i18n_envvars, \
+    fixup_i18n_envvars
 from quodlibet.util.dprint import print_, print_d, print_w, print_e
 from quodlibet.const import MinVersions, Version
 
 PLUGIN_DIRS = ["editing", "events", "playorder", "songsmenu", "playlist",
                "gstreamer", "covers"]
+
+
+GlibTranslations().install(unicode=True)
 
 
 class Application(object):
@@ -50,6 +47,14 @@ class Application(object):
     library = None
     player = None
 
+    cover_manager = None
+
+    name = None
+    """The application name e.g. 'Quod Libet'"""
+
+    id = None
+    """The application ID e.g. 'quodlibet'"""
+
     @property
     def librarian(self):
         return self.library.librarian
@@ -62,7 +67,7 @@ class Application(object):
         from gi.repository import GLib
 
         def idle_quit():
-            if self.window and not self.window.in_destruction():
+            if self.window:
                 self.window.destroy()
 
         # so this can be called from a signal handler and before
@@ -71,15 +76,12 @@ class Application(object):
 
     def show(self):
         from quodlibet.qltk import Window
-        self.window.show()
         for window in Window.windows:
             window.show()
 
     def present(self):
         # deiconify is needed if the window is on another workspace
         from quodlibet.qltk import Window
-        self.window.deiconify()
-        self.window.present()
         for window in Window.windows:
             window.deiconify()
             window.present()
@@ -88,18 +90,60 @@ class Application(object):
         from quodlibet.qltk import Window
         for window in Window.windows:
             window.hide()
-        self.window.hide()
 
 app = Application()
 
 
-def _gtk_init(icon=None):
+def _fix_gst_leaks():
+    """gst_element_add_pad and gst_bin_add are wrongly annotated and lead
+    to PyGObject refing the passed element.
+
+    Work around by adding a wrapper that unrefs afterwards.
+    Can be called multiple times.
+
+    https://bugzilla.gnome.org/show_bug.cgi?id=741390
+    https://bugzilla.gnome.org/show_bug.cgi?id=702960
+    """
+
+    from gi.repository import Gst
+
+    assert Gst.is_initialized()
+
+    def do_wrap(func):
+        def wrap(self, obj):
+            result = func(self, obj)
+            obj.unref()
+            return result
+        return wrap
+
+    parent = Gst.Bin()
+    elm = Gst.Bin()
+    parent.add(elm)
+    if elm.__grefcount__ == 3:
+        elm.unref()
+        Gst.Bin.add = do_wrap(Gst.Bin.add)
+
+    pad = Gst.Pad.new("foo", Gst.PadDirection.SRC)
+    parent.add_pad(pad)
+    if pad.__grefcount__ == 3:
+        pad.unref()
+        Gst.Element.add_pad = do_wrap(Gst.Element.add_pad)
+
+
+def _gtk_init():
+    """Call before using Gtk/Gdk"""
+
     import gi
+
+    # make sure GdkX11 doesn't get used under Windows
+    if os.name == "nt":
+        sys.modules["gi.repository.GdkX11"] = None
 
     try:
         # not sure if this is available under Windows
         gi.require_version("GdkX11", "3.0")
         from gi.repository import GdkX11
+        GdkX11
     except (ValueError, ImportError):
         pass
 
@@ -111,7 +155,7 @@ def _gtk_init(icon=None):
     gi.require_version("GdkPixbuf", "2.0")
     gi.require_version("Gio", "2.0")
 
-    from gi.repository import Gtk, GObject, GLib, Gdk
+    from gi.repository import Gtk, GObject, Gdk, GdkPixbuf
 
     # add Gtk.TreePath.__getitem__/__len__ for PyGObject 3.2
     try:
@@ -126,65 +170,93 @@ def _gtk_init(icon=None):
         Gdk.BUTTON_MIDDLE = 2
         Gdk.BUTTON_SECONDARY = 3
 
+    if not hasattr(Gdk, "EVENT_PROPAGATE"):
+        Gdk.EVENT_PROPAGATE = 0
+        Gdk.EVENT_STOP = 1
+
+    # On windows the default variants only do ANSI paths, so replace them.
+    # In some typelibs they are replaced by default, in some don't..
+    if os.name == "nt":
+        for name in ["new_from_file_at_scale", "new_from_file_at_size",
+                     "new_from_file"]:
+            cls = GdkPixbuf.Pixbuf
+            setattr(cls, name, getattr(cls, name + "_utf8", name))
+
+    # https://bugzilla.gnome.org/show_bug.cgi?id=670372
+    if not hasattr(GdkPixbuf.Pixbuf, "savev"):
+        GdkPixbuf.Pixbuf.savev = GdkPixbuf.Pixbuf.save
+
     # Force menu/button image related settings. We might show too many atm
     # but this makes sure we don't miss cases where we forgot to force them
     # per widget.
+    # https://bugzilla.gnome.org/show_bug.cgi?id=708676
+    warnings.filterwarnings('ignore', '.*g_value_get_int.*', Warning)
+
+    # some day... but not now
+    warnings.filterwarnings(
+        'ignore', '.*Stock items are deprecated.*', Warning)
+    warnings.filterwarnings(
+        'ignore', '.*:use-stock.*', Warning)
+    warnings.filterwarnings(
+        'ignore', '.*The property GtkAlignment:[^\s]+ is deprecated.*',
+        Warning)
+
     settings = Gtk.Settings.get_default()
-    settings.set_property("gtk-button-images", True)
-    settings.set_property("gtk-menu-images", True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        settings.set_property("gtk-button-images", True)
+        settings.set_property("gtk-menu-images", True)
+    if hasattr(settings.props, "gtk_primary_button_warps_slider"):
+        settings.set_property("gtk-primary-button-warps-slider", True)
 
     # Make sure PyGObject includes support for foreign cairo structs
-    some_window = Gtk.OffscreenWindow()
-    some_window.show()
     try:
-        some_window.get_surface()
-    except TypeError:
+        gi.require_foreign("cairo")
+    except AttributeError:
+        # older pygobject
+        pass
+    except ImportError:
         print_e("PyGObject is missing cairo support")
         exit(1)
 
     # CSS overrides
-    style_provider = Gtk.CssProvider()
-    style_provider.load_from_data("""
-        /* Make GtkPaned look like in <=3.12, we depend on the spacing */
-        GtkPaned {
-            -GtkPaned-handle-size: 6;
-            background-image: none;
-            margin: 0;
-        }
-    """)
-    Gtk.StyleContext.add_provider_for_screen(
-        Gdk.Screen.get_default(),
-        style_provider,
-        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-    )
+    if os.name == "nt":
+        # somehow borders are missing under Windows & Gtk+3.14
+        style_provider = Gtk.CssProvider()
+        style_provider.load_from_data("""
+            .menu {
+                border: 1px solid @borders;
+            }
+        """)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            style_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+
+    if sys.platform == "darwin":
+        # fix duplicated shadows for popups with Gtk+3.14
+        style_provider = Gtk.CssProvider()
+        style_provider.load_from_data("""
+            GtkWindow {
+                box-shadow: none;
+            }
+            .tooltip {
+                border-radius: 0;
+                padding: 0;
+            }
+            .tooltip.background {
+                background-clip: border-box;
+            }
+            """)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            style_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
 
     # https://bugzilla.gnome.org/show_bug.cgi?id=708676
     warnings.filterwarnings('ignore', '.*g_value_get_int.*', Warning)
-
-    # We don't depend on Gst overrides, so make sure it's initialized.
-    try:
-        gi.require_version("Gst", "1.0")
-        from gi.repository import Gst
-    except (ValueError, ImportError):
-        pass
-    else:
-        if not Gst.is_initialized():
-            try:
-                ok, argv = Gst.init_check(sys.argv)
-            except GLib.GError:
-                print_e("Failed to initialize GStreamer")
-                # Uninited Gst segfaults: make sure no one can use it
-                sys.modules["gi.repository.Gst"] = None
-            else:
-                sys.argv = argv
-
-                # https://bugzilla.gnome.org/show_bug.cgi?id=710447
-                import threading
-                threading.Thread(target=lambda: None).start()
-
-    # some code depends on utf-8 default encoding (pygtk used to set it)
-    reload(sys)
-    sys.setdefaultencoding("utf-8")
 
     # blacklist some modules, simply loading can cause segfaults
     sys.modules["gtk"] = None
@@ -197,19 +269,78 @@ def _gtk_init(icon=None):
     if pygobject_version < (3, 9):
         GObject.threads_init()
 
-    theme = Gtk.IconTheme.get_default()
-    theme.append_search_path(quodlibet.const.IMAGEDIR)
 
-    if icon:
-        Gtk.Window.set_default_icon_name(icon)
+def _gst_init():
+    """Call once before importing GStreamer"""
+
+    assert "gi.repository.Gst" not in sys.modules
+
+    import gi
+
+    # We don't want python-gst, it changes API..
+    assert "gi.overrides.Gst" not in sys.modules
+    sys.modules["gi.overrides.Gst"] = None
+
+    # blacklist some modules, simply loading can cause segfaults
+    sys.modules["gst"] = None
+
+    # We don't depend on Gst overrides, so make sure it's initialized.
+    try:
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+    except (ValueError, ImportError):
+        return
+
+    if Gst.is_initialized():
+        return
+
+    from gi.repository import GLib
+
+    try:
+        ok, argv = Gst.init_check(sys.argv)
+    except GLib.GError:
+        print_e("Failed to initialize GStreamer")
+        # Uninited Gst segfaults: make sure no one can use it
+        sys.modules["gi.repository.Gst"] = None
+    else:
+        sys.argv = argv
+
+        # monkey patching ahead
+        _fix_gst_leaks()
+
+        # https://bugzilla.gnome.org/show_bug.cgi?id=710447
+        import threading
+        threading.Thread(target=lambda: None).start()
+
+
+def _gtk_icons_init(theme_search_path, default_icon_name=None):
+    """Register a local fallback icon theme containing our own icons.
+
+    `default_icon_name` is the icon name used for all windows if nothing
+    else is specified.
+    """
+
+    from gi.repository import Gtk
+
+    theme = Gtk.IconTheme.get_default()
+
+    assert os.path.exists(theme_search_path)
+    theme.append_search_path(theme_search_path)
+
+    if default_icon_name is not None:
+        assert theme.has_icon(default_icon_name)
+        Gtk.Window.set_default_icon_name(default_icon_name)
 
 
 def _dbus_init():
+    """Setup dbus mainloop integration. Call before using dbus"""
+
     try:
         from dbus.mainloop.glib import DBusGMainLoop, threads_init
     except ImportError:
         try:
             import dbus.glib
+            dbus.glib
         except ImportError:
             return
     else:
@@ -218,18 +349,22 @@ def _dbus_init():
 
 
 def _gettext_init():
+    """Call before using gettext helpers"""
+
+    # set by tests
+    if "QUODLIBET_NO_TRANS" in os.environ:
+        return
+
+    set_i18n_envvars()
+    fixup_i18n_envvars()
+
+    print_d("LANGUAGE: %r" % os.environ.get("LANGUAGE"))
+    print_d("LANG: %r" % os.environ.get("LANG"))
+
     try:
         locale.setlocale(locale.LC_ALL, '')
     except locale.Error:
         pass
-
-    if os.name == "nt":
-        import ctypes
-        k32 = ctypes.windll.kernel32
-        langs = filter(None, map(locale.windows_locale.get,
-                                 [k32.GetUserDefaultUILanguage(),
-                                  k32.GetSystemDefaultUILanguage()]))
-        os.environ.setdefault('LANG', ":".join(langs))
 
     # Use the locale dir in ../build/share/locale if there is one
     localedir = os.path.dirname(quodlibet.const.BASEDIR)
@@ -238,8 +373,6 @@ def _gettext_init():
         # py2exe case
         localedir = os.path.join(
             quodlibet.const.BASEDIR, "..", "..", "share", "locale")
-
-    unexpand = quodlibet.util.path.unexpand
 
     if os.path.isdir(localedir):
         print_d("Using local localedir: %r" % unexpand(localedir))
@@ -255,23 +388,8 @@ def _gettext_init():
     else:
         print_d("Translations loaded: %r" % unexpand(t.path))
 
-    t.install(unicode=True)
-
-
-def set_process_title(title):
-    """Sets process name as visible in ps or top. Requires ctypes libc
-    and is almost certainly *nix-only. See issue 736"""
-
-    if os.name == "nt":
-        return
-
-    try:
-        libc = load_library(["libc.so.6", "c"])[0]
-        # 15 = PR_SET_NAME, apparently
-        libc.prctl(15, title, 0, 0, 0)
-    except (OSError, AttributeError):
-        print_d("Couldn't find module libc.so.6 (ctypes). "
-                "Not setting process title.")
+    debug_text = os.environ.get("QUODLIBET_TEST_TRANS")
+    t.install(unicode=True, debug_text=debug_text)
 
 
 def _python_init():
@@ -279,77 +397,47 @@ def _python_init():
     import sys
     if sys.version_info < MinVersions.PYTHON:
         actual = Version(sys.version_info[:3])
-        print_w("Python %s required. %s found." % (MinVersions.PYTHON, actual))
+        raise ImportError("Python %s required. %s found." %
+                          (MinVersions.PYTHON, actual))
 
-    # The default regex escaping function doesn't work for non-ASCII.
-    # Use a blacklist of regex-specific characters instead.
-    def re_esc(str, BAD="/.^$*+?{,\\[]|()<>#=!:"):
-        needs_escape = lambda c: (c in BAD and "\\" + c) or c
-        return "".join(map(needs_escape, str))
-    re.escape = re_esc
+    # some code depends on utf-8 default encoding (pygtk used to set it)
+    reload(sys)
+    sys.setdefaultencoding("utf-8")
 
     __builtin__.__dict__["print_"] = print_
     __builtin__.__dict__["print_d"] = print_d
     __builtin__.__dict__["print_e"] = print_e
     __builtin__.__dict__["print_w"] = print_w
 
-del(_dummy_gettext)
-del(_dummy_ngettext)
-
 _python_init()
 _gettext_init()
 
 
-def exit(status=None, notify_startup=False):
-    """Call this to abort the startup before any mainloop starts.
+def init(icon=None, proc_title=None, name=None):
+    global quodlibet
 
-    notify_startup needs to be true if QL could potentially have been
-    called from the desktop file.
-    """
-
-    if notify_startup:
-        from gi.repository import Gdk
-        Gdk.notify_startup_complete()
-    raise SystemExit(status)
-
-
-def init(library=None, icon=None, title=None, name=None):
     print_d("Entering quodlibet.init")
 
-    _gtk_init(icon)
+    _gtk_init()
+    _gtk_icons_init(quodlibet.const.IMAGEDIR, icon)
+    _gst_init()
     _dbus_init()
+    _init_debug()
 
     from gi.repository import GLib
 
-    if title:
-        GLib.set_prgname(title)
-        set_process_title(title)
+    if proc_title:
+        GLib.set_prgname(proc_title)
+        set_process_title(proc_title)
         # Issue 736 - set after main loop has started (gtk seems to reset it)
-        GLib.idle_add(set_process_title, title)
-
-        # so is_first_session() returns False next time
-        quit_add(0, finish_first_session, title)
+        GLib.idle_add(set_process_title, proc_title)
 
     if name:
         GLib.set_application_name(name)
 
-    # We already imported this, but Python is dumb and thinks we're rebinding
-    # a local when we import it later.
-    import quodlibet.util
-    quodlibet.util.path.mkdir(quodlibet.const.USERDIR, 0750)
-
-    if library:
-        print_d("Initializing main library (%s)" % (
-            quodlibet.util.path.unexpand(library)))
-
-    import quodlibet.library
-    library = quodlibet.library.init(library)
-
-    _init_debug()
+    mkdir(quodlibet.const.USERDIR, 0750)
 
     print_d("Finished initialization.")
-
-    return library
 
 
 def init_plugins(no_plugins=False):
@@ -400,7 +488,8 @@ def enable_periodic_save(save_library):
 
     def periodic_library_save():
         while 1:
-            quodlibet.library.save()
+            # max every 15 minutes
+            quodlibet.library.save(save_period=15 * 60)
             yield
 
     copool.add(periodic_library_save, timeout=timeout)
@@ -455,105 +544,65 @@ def _init_debug():
         faulthandler.enable()
 
 
-def _init_signal(signal_action):
-    """Catches signals which should exit the program and calls `signal_action`
-    after the main loop has started, even if the signal occurred before the
-    main loop has started.
-    """
+def _init_osx(window):
+    from AppKit import NSObject, NSApplication
+    import objc
 
-    import os
+    try:
+        from gi.repository import GtkosxApplication
+        osx_app = GtkosxApplication.Application()
+    except ImportError:
+        print_d("importing GtkosxApplication failed, no native menus")
+    else:
+        window.set_as_osx_window(osx_app)
+        osx_app.ready()
 
-    if os.name == "nt":
-        return
+    # Instead of quitting when the main window gets closed just hide it.
+    # If the dock icon gets clicked we get
+    # applicationShouldHandleReopen_hasVisibleWindows_ and show everything.
+    class Delegate(NSObject):
 
-    import signal
-    import gi
-    gi.require_version("GLib", "2.0")
-    from gi.repository import GLib
+        @objc.signature('B@:#B')
+        def applicationShouldHandleReopen_hasVisibleWindows_(
+                self, ns_app, flag):
+            print_d("osx: handle reopen")
+            app.present()
+            return True
 
-    for sig_name in ["SIGINT", "SIGTERM", "SIGHUP"]:
-        sig = getattr(signal, sig_name, None)
-        if sig is None:
-            continue
+        def applicationShouldTerminate_(self, sender):
+            print_d("osx: block termination")
+            # FIXME: figure out why idle_add is needed here
+            from gi.repository import GLib
+            GLib.idle_add(app.quit)
+            return False
 
-        # Before the mainloop starts we catch signals in python
-        # directly and idle_add the app.quit
-        def idle_handler(*args):
-            print_d("Python signal handler activated.")
-            GLib.idle_add(signal_action, priority=GLib.PRIORITY_HIGH)
+    shared_app = NSApplication.sharedApplication()
+    delegate = Delegate.alloc().init()
+    delegate.retain()
+    shared_app.setDelegate_(delegate)
 
-        print_d("Register Python signal handler: %r" % sig)
-        signal.signal(sig, idle_handler)
-
-        # After the mainloop has started the python handler
-        # blocks if no mainloop is active (for whatever reason).
-        # Override the python handler with the GLib one, which works here.
-        def install_glib_handler(sig):
-
-            def handler(*args):
-                print_d("GLib signal handler activated.")
-                signal_action()
-
-            # older pygobject
-            unix_signal_add = None
-            if hasattr(GLib, "unix_signal_add"):
-                unix_signal_add = GLib.unix_signal_add
-            elif hasattr(GLib, "unix_signal_add_full"):
-                unix_signal_add = GLib.unix_signal_add_full
-
-            if unix_signal_add:
-                print_d("Register GLib signal handler: %r" % sig)
-                unix_signal_add(GLib.PRIORITY_HIGH, sig, handler, None)
-            else:
-                print_d("Can't install GLib signal handler, too old gi.")
-
-        GLib.idle_add(install_glib_handler, sig, priority=GLib.PRIORITY_HIGH)
-
-# minimal emulation of gtk.quit_add
-
-_quit_funcs = []
+    # QL shouldn't exit on window close, EF should
+    if window.get_osx_is_persistent():
+        window.connect(
+            "delete-event", lambda window, event: window.hide() or True)
 
 
-def quit_add(level, func, *args):
-    """level==0 -> after, level !=0 -> before"""
-
-    assert level in (0, 1)
-    _quit_funcs.append([level, func, args])
-
-
-def _quit_before():
-    for level, func, args in _quit_funcs:
-        if level != 0:
-            func(*args)
-
-
-def _quit_after():
-    for level, func, args in _quit_funcs:
-        if level == 0:
-            func(*args)
-
-
-def main(window):
+def main(window, before_quit=None):
     print_d("Entering quodlibet.main")
-    from gi.repository import Gtk
+    from gi.repository import Gtk, Gdk
 
-    def quit_gtk(m):
-        _quit_before()
+    def quit_gtk(window):
+
+        if before_quit is not None:
+            before_quit()
+
         # disable plugins
         import quodlibet.plugins
         quodlibet.plugins.quit()
 
-        # stop all copools
-        print_d("Quit GTK: Stop all copools")
+        # for debug: this will list active copools
         from quodlibet.util import copool
         copool.pause_all()
-
-        # events that add new events to the main loop (like copool)
-        # can block the shutdown, so force stop after some time.
-        # gtk.main_iteration will return True if quit gets called here
-        from gi.repository import GLib
-        GLib.timeout_add(4 * 1000, Gtk.main_quit,
-                         priority=GLib.PRIORITY_HIGH)
 
         # See which browser windows are open and save their names
         # so we can restore them on start
@@ -571,19 +620,18 @@ def main(window):
         for window in Window.windows:
             window.destroy()
 
-        print_d("Quit GTK: Process pending events...")
-        while Gtk.events_pending():
-            if Gtk.main_iteration_do(False):
-                print_d("Quit GTK: Timeout occurred, force quit.")
-                break
-        else:
-            Gtk.main_quit()
+        Gtk.main_quit()
 
         print_d("Quit GTK: done.")
 
     window.connect('destroy', quit_gtk)
-    window.show()
+
+    if sys.platform == "darwin":
+        _init_osx(window)
+
+    if not window.show_maybe():
+        # if we don't show a window, startup isn't completed, so call manually
+        Gdk.notify_startup_complete()
 
     Gtk.main()
-
-    _quit_after()
+    print_d("Gtk.main() done.")

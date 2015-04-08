@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2005 Joe Wreschnig, Michael Urman
 #           2012 Christoph Reiter
 #
@@ -5,12 +6,30 @@
 # it under the terms of the GNU General Public License version 2 as
 # published by the Free Software Foundation
 
+import os
 import sys
+import signal
 
 import gi
+gi.require_version("Gtk", "3.0")
+
 from gi.repository import Gtk
 from gi.repository import Gdk
 from gi.repository import GLib
+
+
+def redraw_all_toplevels():
+    """A hack to trigger redraws for all windows and widgets."""
+
+    for widget in Gtk.Window.list_toplevels():
+        if not widget.get_realized():
+            continue
+        if widget.is_active():
+            widget.queue_draw()
+            continue
+        sensitive = widget.get_sensitive()
+        widget.set_sensitive(not sensitive)
+        widget.set_sensitive(sensitive)
 
 
 def selection_set_songs(selection_data, songs):
@@ -54,6 +73,19 @@ def get_top_parent(widget):
         return None
 
 
+def get_menu_item_top_parent(widget):
+    """Returns the toplevel for a menu item or None if the menu
+    and none of its parents isn't attached to a widget
+    """
+
+    while isinstance(widget, Gtk.MenuItem):
+        menu = widget.get_parent()
+        if not menu:
+            return
+        widget = menu.get_attach_widget()
+    return get_top_parent(widget)
+
+
 def find_widgets(container, type_):
     """Given a container, find all children that are a subclass of type_
     (including itself)
@@ -71,6 +103,20 @@ def find_widgets(container, type_):
             found.extend(find_widgets(child, type_))
 
     return found
+
+
+def menu_popup(menu, shell, item, func, *args):
+    """Wrapper to fix API break:
+    https://git.gnome.org/browse/gtk+/commit/?id=8463d0ee62b4b22fa
+    """
+
+    if func is not None:
+        def wrap_pos_func(menu, *args):
+            return func(menu, args[-1])
+    else:
+        wrap_pos_func = None
+
+    return menu.popup(shell, item, wrap_pos_func, *args)
 
 
 def _popup_menu_at_widget(menu, widget, button, time, under):
@@ -106,7 +152,7 @@ def _popup_menu_at_widget(menu, widget, button, time, under):
             menu_x = max(0, x + dx - ma.width + wa.width)
 
         return (menu_x, menu_y, True) # x, y, move_within_screen
-    menu.popup(None, None, pos_func, None, button, time)
+    menu_popup(menu, None, None, pos_func, None, button, time)
     return True
 
 
@@ -223,7 +269,83 @@ def io_add_watch(fd, prio, condition, func, *args, **kwargs):
         return GLib.io_add_watch(fd, condition, func, *args, **kwargs)
 
 
+def add_signal_watch(signal_action):
+    """Catches signals which should exit the program and calls `signal_action`
+    after the main loop has started, even if the signal occurred before the
+    main loop has started.
+    """
+
+    sig_names = ["SIGINT", "SIGTERM", "SIGHUP"]
+    if os.name == "nt":
+        sig_names = ["SIGINT", "SIGTERM"]
+
+    signals = {}
+    for name in sig_names:
+        id_ = getattr(signal, name, None)
+        if id_ is None:
+            continue
+        signals[id_] = name
+
+    # in case Python catches a signal, wake up the mainloop.
+    # this makes signal handling work with older pygobject/glib (Ubuntu 12.04)
+    # no idea why..
+    rfd, wfd = os.pipe()
+
+    def wakeup_notify(source, condition):
+        # just read and do nothing so we can keep the watch around
+        if condition == GLib.IO_IN:
+            try:
+                os.read(rfd, 1)
+            except EnvironmentError:
+                pass
+            return True
+        else:
+            return False
+
+    signal.set_wakeup_fd(wfd)
+    io_add_watch(rfd, GLib.PRIORITY_HIGH,
+                 GLib.IO_IN | GLib.IO_ERR | GLib.IO_HUP,
+                 wakeup_notify)
+
+    # set a python handler for each signal, used before the mainloop
+    for signum, name in signals.items():
+        # Before the mainloop starts we catch signals in python
+        # directly and idle_add the app.quit
+        def idle_handler(signum, frame):
+            print_d("Python signal handler activated: %s" % signals[signum])
+            GLib.idle_add(signal_action, priority=GLib.PRIORITY_HIGH)
+
+        print_d("Register Python signal handler: %r" % name)
+        signal.signal(signum, idle_handler)
+
+    if os.name == "nt":
+        return
+
+    # also try to use the official glib handling if available,
+    # can't hurt I guess
+    unix_signal_add = None
+    if hasattr(GLib, "unix_signal_add"):
+        unix_signal_add = GLib.unix_signal_add
+    elif hasattr(GLib, "unix_signal_add_full"):
+        unix_signal_add = GLib.unix_signal_add_full
+    else:
+        print_d("Can't install GLib signal handler, too old gi or wrong OS")
+        return
+
+    for signum, name in signals.items():
+
+        def handler(signum):
+            print_d("GLib signal handler activated: %s" % signals[signum])
+            signal_action()
+
+        print_d("Register GLib signal handler: %r" % name)
+        unix_signal_add(GLib.PRIORITY_HIGH, signum, handler, signum)
+
+
 # Legacy plugin/code support.
-from quodlibet.qltk.getstring import GetStringDialog
 from quodlibet.qltk.msg import *
 from quodlibet.qltk.x import *
+from quodlibet.qltk.window import Window, UniqueWindow
+
+Window
+UniqueWindow

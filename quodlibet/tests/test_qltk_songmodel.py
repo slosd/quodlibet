@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from tests import TestCase
 
 from gi.repository import Gtk
@@ -30,6 +31,14 @@ class TPlaylistModel(TestCase):
         self.failUnless(self.pl.current is None)
         self.pl.set(range(10))
         self.failUnlessEqual(self.pl.current, 0)
+
+    def test_current_recover_unknown(self):
+        self.pl.set([1, 2, 3, 4])
+        self.assertIs(self.pl.go_to(5), None)
+        self.pl.set([1, 2, 3, 4, 5])
+        self.assertEqual(self.pl.current, 5)
+        self.assertIsNot(self.pl.go_to(4), None)
+        self.assertEqual(self.pl.current, 4)
 
     def test_isempty(self):
         self.failIf(self.pl.is_empty())
@@ -255,6 +264,9 @@ class TPlaylistMux(TestCase):
         self.p.setup(self.mux, None, 0)
         self.failUnless(self.pl.current is None)
 
+    def test_destroy(self):
+        self.mux.destroy()
+
     def test_only_pl(self):
         self.pl.set(range(10))
         do_events()
@@ -380,6 +392,21 @@ class TPlaylistMux(TestCase):
     def test_queue(self):
         self.mux.enqueue(range(40))
         self.failUnlessEqual(list(self.q.itervalues()), range(40))
+
+    def test_queue_move_entry(self):
+        self.q.set(range(10))
+        self.p.next()
+        self.assertEqual(self.p.song, 0)
+        self.q.move_after(self.q[-1].iter, None)
+        self.p.next()
+        self.assertEqual(self.p.song, 9)
+
+    def test_goto_queue(self):
+        self.pl.set(range(20, 30))
+        self.q.set(range(10))
+        self.mux.go_to(self.q[-1].iter, source=self.q)
+        self.assertTrue(self.q.sourced)
+        self.assertEqual(self.mux.current, self.q[-1][0])
 
     def tearDown(self):
         self.p.destroy()

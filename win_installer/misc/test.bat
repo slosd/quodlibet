@@ -1,2 +1,3 @@
 call env.bat
-python setup.py test
+python %~dp0quodlibet\quodlibet\setup.py clean --all
+python %~dp0quodlibet\quodlibet\setup.py test

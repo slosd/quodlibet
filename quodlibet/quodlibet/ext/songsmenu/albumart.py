@@ -6,7 +6,7 @@
 #                Jeremy Cantrell <jmcantrell@gmail.com>
 #           2010 Aymeric Mansoux <aymeric@goto10.org>
 #           2008-2013 Christoph Reiter
-#           2011-2013 Nick Boultbee
+#           2011-2014 Nick Boultbee
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -19,22 +19,23 @@ import gzip
 
 import urllib
 import urllib2
-from HTMLParser import HTMLParser, HTMLParseError
 from cStringIO import StringIO
 from xml.dom import minidom
 
 from gi.repository import Gtk, Pango, GLib, Gdk, GdkPixbuf
+from quodlibet.pattern import ArbitraryExtensionFileFromPattern
 from quodlibet.plugins import PluginConfigMixin
 from quodlibet.util import format_size, print_exc
+from quodlibet.util.dprint import print_d
 
 from quodlibet import util, qltk, print_w, app
+from quodlibet.qltk.msg import ConfirmFileReplace
+from quodlibet.qltk.x import Paned, Align
 from quodlibet.qltk.views import AllTreeView
 from quodlibet.qltk.image import (set_renderer_from_pbosf, get_scale_factor,
-    get_pbosf_for_pixbuf, set_image_from_pbosf)
+    get_pbosf_for_pixbuf, set_image_from_pbosf, scale, add_border_widget)
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
-from quodlibet.parse import Pattern
-from quodlibet.util.path import fsencode, iscommand
-from quodlibet.util import thumbnails
+from quodlibet.util.path import iscommand
 
 
 USER_AGENT = "Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.2.13) " \
@@ -260,8 +261,8 @@ class CoverArea(Gtk.VBox, PluginConfigMixin):
             else:
                 fn_list.append("<artist> - <album>.jpg")
         else:
-            print_w("No album for \"%s\". Could be difficult finding art..." %
-                    song("~filename"))
+            print_w(u"No album for \"%s\". Could be difficult "
+                    u"finding art…" % song("~filename"))
             title = song("title")
             if title and artist:
                 fn_list.append("<artist> - <title>.jpg")
@@ -278,7 +279,7 @@ class CoverArea(Gtk.VBox, PluginConfigMixin):
         if self.name_combo.get_active() < 0:
             self.name_combo.set_active(0)
 
-        table = Gtk.Table(rows=2, columns=2, homogeneous=False)
+        table = Gtk.Table(n_rows=2, n_columns=2, homogeneous=False)
         table.set_row_spacing(0, 5)
         table.set_row_spacing(1, 5)
         table.set_col_spacing(0, 5)
@@ -301,8 +302,7 @@ class CoverArea(Gtk.VBox, PluginConfigMixin):
         bbox.pack_start(self.button, True, True, 0)
         bbox.pack_start(close_button, True, True, 0)
 
-        bb_align = Gtk.Alignment.new(0, 1, 1, 0)
-        bb_align.set_property('right-padding', 6)
+        bb_align = Align(valign=Gtk.Align.END, right=6)
         bb_align.add(bbox)
 
         main_hbox = Gtk.HBox()
@@ -333,17 +333,18 @@ class CoverArea(Gtk.VBox, PluginConfigMixin):
     def __save(self, *data):
         """Save the cover and spawn the program to edit it if selected"""
 
-        filename = self.name_combo.get_active_text()
-        # Allow support for filename patterns
-        pattern = Pattern(filename)
-        filename = fsencode(pattern.format(self.song))
+        save_format = self.name_combo.get_active_text()
+        # Allow use of patterns in creating cover filenames
+        pattern = ArbitraryExtensionFileFromPattern(
+            save_format.decode("utf-8"))
+        filename = pattern.format(self.song)
+        print_d("Using '%s' as filename based on %s" % (filename, save_format))
         file_path = os.path.join(self.dirname, filename)
 
-        msg = (_('The file <b>%s</b> already exists.\n\nOverwrite?')
-                % util.escape(filename))
-        if (os.path.exists(file_path)
-                and not qltk.ConfirmAction(None, _('File exists'), msg).run()):
-            return
+        if os.path.exists(file_path):
+            resp = ConfirmFileReplace(self, file_path).run()
+            if resp != ConfirmFileReplace.RESPONSE_REPLACE:
+                return
 
         try:
             f = open(file_path, 'wb')
@@ -359,7 +360,7 @@ class CoverArea(Gtk.VBox, PluginConfigMixin):
                 except:
                     pass
 
-            app.window.emit("artwork-changed", [self.song])
+            app.cover_manager.cover_changed([self.song])
 
         self.main_win.destroy()
 
@@ -392,7 +393,7 @@ class CoverArea(Gtk.VBox, PluginConfigMixin):
             height = alloc.height
             scale_factor = get_scale_factor(self)
             boundary = (width * scale_factor, height * scale_factor)
-            pixbuf = thumbnails.scale(pixbuf, boundary, scale_up=False)
+            pixbuf = scale(pixbuf, boundary, scale_up=False)
             pbosf = get_pbosf_for_pixbuf(self, pixbuf)
 
         set_image_from_pbosf(self.image, pbosf)
@@ -513,7 +514,7 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
         image = CoverArea(self, songs[0])
 
         self.liststore = Gtk.ListStore(object, object)
-        self.treeview = treeview = AllTreeView(self.liststore)
+        self.treeview = treeview = AllTreeView(model=self.liststore)
         self.treeview.set_headers_visible(False)
         self.treeview.set_rules_hint(True)
 
@@ -558,11 +559,14 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
             esc = escape_data
 
             txt = '<b><i>%s</i></b>' % esc(cover['name'])
-            txt += _('\n<small>from <i>%s</i></small>') % esc(cover['source'])
+            txt += "\n<small>%s</small>" % (
+                _('from %(source)s') % {
+                    "source": util.italic(esc(cover['source']))})
             if 'resolution' in cover:
-                txt += _('\nResolution: <i>%s</i>') % esc(cover['resolution'])
+                txt += "\n" + _('Resolution: %s') % util.italic(
+                    esc(cover['resolution']))
             if 'size' in cover:
-                txt += _('\nSize: <i>%s</i>') % esc(cover['size'])
+                txt += "\n" + _('Size: %s') % util.italic(esc(cover['size']))
 
             cell.markup = txt
             cell.set_property('markup', cell.markup)
@@ -586,20 +590,20 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
 
         widget_space = 5
 
-        search_hbox = Gtk.HBox(False, widget_space)
+        search_hbox = Gtk.HBox(spacing=widget_space)
         search_hbox.pack_start(self.search_field, True, True, 0)
         search_hbox.pack_start(self.search_button, False, True, 0)
 
         self.progress = Gtk.ProgressBar()
 
-        left_vbox = Gtk.VBox(False, widget_space)
+        left_vbox = Gtk.VBox(spacing=widget_space)
         left_vbox.pack_start(search_hbox, False, True, 0)
         left_vbox.pack_start(sw_list, True, True, 0)
 
-        hpaned = Gtk.HPaned()
+        hpaned = Paned()
         hpaned.set_border_width(widget_space)
-        hpaned.pack1(left_vbox)
-        hpaned.pack2(image)
+        hpaned.pack1(left_vbox, shrink=False)
+        hpaned.pack2(image, shrink=False)
         hpaned.set_position(275)
 
         self.add(hpaned)
@@ -636,7 +640,7 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
         self.search_button.set_sensitive(False)
 
         self.progress.set_fraction(0)
-        self.progress.set_text(_('Searching...'))
+        self.progress.set_text(_(u'Searching…'))
         self.progress.show()
 
         self.liststore.clear()
@@ -681,8 +685,7 @@ class AlbumArtWindow(qltk.Window, PluginConfigMixin):
             size = self.THUMB_SIZE * scale_factor - scale_factor * 2
             pixbuf = pbloader.get_pixbuf().scale_simple(size, size,
                 GdkPixbuf.InterpType.BILINEAR)
-            pixbuf = thumbnails.add_border(
-                pixbuf, 80, round=True, width=scale_factor)
+            pixbuf = add_border_widget(pixbuf, self, None, round=True)
             thumb = get_pbosf_for_pixbuf(self, pixbuf)
         except (GLib.GError, IOError):
             pass
@@ -814,14 +817,13 @@ class DownloadAlbumArt(SongsMenuPlugin, PluginConfigMixin):
 
     PLUGIN_ID = 'Download Album Art'
     PLUGIN_NAME = _('Download Album Art')
-    PLUGIN_DESC = _('Download album covers from various websites')
+    PLUGIN_DESC = _('Downloads album covers from various websites.')
     PLUGIN_ICON = Gtk.STOCK_FIND
-    PLUGIN_VERSION = '0.5.2'
     CONFIG_SECTION = PLUGIN_CONFIG_SECTION
 
     @classmethod
     def PluginPreferences(cls, window):
-        table = Gtk.Table(len(engines), 2)
+        table = Gtk.Table(n_rows=len(engines), n_columns=2)
         table.set_col_spacings(6)
         table.set_row_spacings(6)
         frame = qltk.Frame(_("Sources"), child=table)
@@ -833,7 +835,7 @@ class DownloadAlbumArt(SongsMenuPlugin, PluginConfigMixin):
                 True)
             table.attach(check, 0, 1, i, i + 1)
 
-            button = Gtk.Button(eng['url'])
+            button = Gtk.Button(label=eng['url'])
             button.connect('clicked', lambda s: util.website(s.get_label()))
             table.attach(button, 1, 2, i, i + 1,
                          xoptions=Gtk.AttachOptions.FILL |

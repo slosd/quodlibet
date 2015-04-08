@@ -1,17 +1,18 @@
+# -*- coding: utf-8 -*-
 import re
 
 from gi.repository import Gtk, GObject
 
 from quodlibet.plugins.editing import RenameFilesPlugin, TagsFromPathPlugin
+from quodlibet.util import connect_obj
 
 
 class RegExpSub(Gtk.HBox, RenameFilesPlugin, TagsFromPathPlugin):
     PLUGIN_ID = "Regex Substitution"
     PLUGIN_NAME = _("Regex Substitution")
-    PLUGIN_DESC = _("Allow arbitrary regex substitutions (s///) when "
+    PLUGIN_DESC = _("Allows arbitrary regex substitutions (s///) when "
                     "tagging or renaming files.")
     PLUGIN_ICON = Gtk.STOCK_FIND_AND_REPLACE
-    PLUGIN_VERSION = "1"
 
     __gsignals__ = {
         "changed": (GObject.SignalFlags.RUN_LAST, None, ())
@@ -28,8 +29,8 @@ class RegExpSub(Gtk.HBox, RenameFilesPlugin, TagsFromPathPlugin):
         self.pack_start(self._to, True, True, 0)
         self.pack_start(Gtk.Label("/"), True, True, 0)
 
-        self._from.connect_object('changed', self.emit, 'changed')
-        self._to.connect_object('changed', self.emit, 'changed')
+        connect_obj(self._from, 'changed', self.emit, 'changed')
+        connect_obj(self._to, 'changed', self.emit, 'changed')
 
     def filter(self, orig_or_tag, value):
         fr = self._from.get_text().decode('utf-8')

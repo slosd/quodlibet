@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2014 Jan Path
 #           2014 Christoph Reiter
 #
@@ -8,7 +9,7 @@
 from gi.repository import Gtk
 
 from quodlibet import config
-from quodlibet.qltk import GetStringDialog
+from quodlibet.qltk.getstring import GetStringDialog
 from quodlibet.qltk.ratingsmenu import ConfirmRateMultipleDialog
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 
@@ -16,7 +17,7 @@ from quodlibet.plugins.songsmenu import SongsMenuPlugin
 class ExactRating(SongsMenuPlugin):
     PLUGIN_ID = "exact-rating"
     PLUGIN_NAME = _("Set Exact Rating")
-    PLUGIN_DESC = _("Dialog to set rating of songs as number")
+    PLUGIN_DESC = _("Allows setting the rating of songs with a number.")
 
     def plugin_songs(self, songs):
         value = -1
@@ -24,7 +25,8 @@ class ExactRating(SongsMenuPlugin):
             input_string = GetStringDialog(
                 self.plugin_window,
                 self.PLUGIN_NAME,
-                _("Please give your desired rating on a scale from 0 to 1"),
+                _("Please give your desired rating on a scale "
+                  "from 0.0 to 1.0"),
                 Gtk.STOCK_APPLY
             ).run()
 

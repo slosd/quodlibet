@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import sys
 import time
@@ -9,6 +10,8 @@ from gi.repository import Gtk
 from quodlibet import const
 from quodlibet import util
 from quodlibet.util.path import unexpand, mkdir
+from quodlibet.util import connect_obj
+from quodlibet.util import logging
 
 old_hook = sys.excepthook
 
@@ -45,9 +48,10 @@ class ExceptionDialog(Gtk.Window):
     @classmethod
     def __dump(self, Kind, value, trace, dump, minidump):
         import mutagen
-        from quodlibet.util import logging
-        dumpobj = file(dump, "w")
-        minidumpobj = file(minidump, "w")
+
+        dumpobj = open(dump, "wb")
+        minidumpobj = open(minidump, "wb")
+
         header = "Quod Libet %s\nMutagen %s\nPython %s %s\nPlatform %s" % (
             const.VERSION, mutagen.version_string, sys.version,
             sys.platform, platform.platform())
@@ -56,14 +60,13 @@ class ExceptionDialog(Gtk.Window):
                          "=== STACK TRACE\n%s\n\n") % (
             header, "\n".join(traceback.format_exception(Kind, value, trace)))
 
-        print >>dumpobj, minidump_data
-        print >>minidumpobj, minidump_data
-
+        dumpobj.write(minidump_data)
+        minidumpobj.write(minidump_data)
         minidumpobj.close()
 
-        for logname in logging.names():
-            print >>dumpobj, "=== LOG: %r\n%s\n\n" % (
-                logname, "\n".join(logging.contents(logname)[-50:]))
+        dumpobj.write("=== LOG:\n")
+        for item in logging.get_content(limit=75):
+            dumpobj.write(item.decode("utf-8") + "\n")
 
         dumpobj.close()
 
@@ -79,14 +82,21 @@ class ExceptionDialog(Gtk.Window):
         self.set_border_width(12)
         self.set_title(_("Error Occurred"))
 
-        desc = _("An exception has occured in Quod Libet. A dump file "
-            "has been saved to <b >%s</b> that will help us debug the crash. "
-            "Please file a new issue at http://code.google.com/p/quodlibet/"
-            "issues/list and attach this file or include its contents. This "
+        desc = _("An exception has occured in Quod Libet. A dump file has "
+            "been saved to <b >%(dump-path)s</b> that will help us debug the "
+            "crash. "
+            "Please file a new issue at %(new-issue-url)s"
+            "and attach this file or include its contents. This "
             "file may contain some identifying information about you or your "
             "system, such as a list of recent files played. If this is "
-            "unacceptable, send <b>%s</b> instead with a description of what "
-            "you were doing.") % (unexpand(dump), unexpand(minidump))
+            "unacceptable, send <b>%(mini-dump-path)s</b> instead with a "
+            "description of what "
+            "you were doing.") % {
+                "dump-path": unexpand(dump),
+                "mini-dump-path": unexpand(minidump),
+                "new-issue-url":
+                    "https://github.com/quodlibet/quodlibet/issues/new",
+            }
 
         suggestion = _("Quod Libet may now be unstable. Closing it and "
             "restarting is recommended. Your library will be saved.")
@@ -116,7 +126,7 @@ class ExceptionDialog(Gtk.Window):
         self.add(box)
 
         self.connect('destroy', self.__destroy)
-        cancel.connect_object('clicked', Gtk.Window.destroy, self)
+        connect_obj(cancel, 'clicked', Gtk.Window.destroy, self)
         close.connect('clicked', lambda *x: Gtk.main_quit())
 
         self.get_child().show_all()

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -5,11 +6,11 @@
 # published by the Free Software Foundation
 
 import os
-import sys
+import collections
+import ctypes
 
 if os.name == "nt":
     from win32com.shell import shellcon, shell
-    import win32profile
     import pywintypes
     import pythoncom
 
@@ -47,12 +48,6 @@ def _get_path(folder, default=False, create=False):
     return path
 
 
-def get_environ():
-    """Like os.environ, but with unicode support"""
-
-    return win32profile.GetEnvironmentStrings()
-
-
 def get_personal_dir(**kwargs):
     return _get_path(shellcon.CSIDL_PERSONAL, **kwargs)
 
@@ -78,8 +73,6 @@ def get_link_target(path):
     is targeting or None.
     """
 
-    from quodlibet.util.path import fsnative
-
     link = pythoncom.CoCreateInstance(
         shell.CLSID_ShellLink, None,
         pythoncom.CLSCTX_INPROC_SERVER,
@@ -87,8 +80,9 @@ def get_link_target(path):
 
     try:
         link.QueryInterface(pythoncom.IID_IPersistFile).Load(path)
-        # Not sure what encoding this returns
-        return fsnative(link.GetPath(0)[0])
+        # FIXME: this only supports the old non-unicode API..
+        path = link.GetPath(0)[0]
+        return path.decode("latin-1")
     except pywintypes.com_error:
         pass
 
@@ -96,11 +90,158 @@ def get_link_target(path):
 def get_links_dir():
     """Get the path to the Links directory (%USERPROFILE%\\Links) or None"""
 
-    kfm = pythoncom.CoCreateInstance(shell.CLSID_KnownFolderManager, None,
-        pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IKnownFolderManager)
+    try:
+        kfm = pythoncom.CoCreateInstance(shell.CLSID_KnownFolderManager, None,
+            pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IKnownFolderManager)
+    except pywintypes.com_error:
+        # WinXP for example
+        return
 
     try:
         libs_folder = kfm.GetFolder(shell.FOLDERID_Links)
+        # returns unicode
         return libs_folder.GetPath()
     except pywintypes.com_error:
         pass
+
+
+if os.name == "nt":
+    SetEnvironmentVariableW = ctypes.windll.kernel32.SetEnvironmentVariableW
+    SetEnvironmentVariableW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+    SetEnvironmentVariableW.restype = ctypes.c_bool
+
+    GetEnvironmentStringsW = ctypes.windll.kernel32.GetEnvironmentStringsW
+    GetEnvironmentStringsW.argtypes = []
+    GetEnvironmentStringsW.restype = ctypes.c_void_p
+
+    FreeEnvironmentStringsW = ctypes.windll.kernel32.FreeEnvironmentStringsW
+    FreeEnvironmentStringsW.argtypes = [ctypes.c_void_p]
+    FreeEnvironmentStringsW.restype = ctypes.c_bool
+
+
+class WindowsEnvironError(Exception):
+    pass
+
+
+def _set_windows_env_var(key, value):
+    """Set an env var.
+
+    Can raise WindowsEnvironError
+    """
+
+    if not isinstance(key, unicode):
+        raise TypeError
+
+    if not isinstance(value, unicode):
+        raise TypeError
+
+    status = SetEnvironmentVariableW(key, value)
+    if status == 0:
+        raise WindowsEnvironError
+
+
+def _del_windows_env_var(key):
+    """Delete an env var.
+
+    Can raise WindowsEnvironError
+    """
+
+    if not isinstance(key, unicode):
+        raise TypeError
+
+    status = SetEnvironmentVariableW(key, None)
+    if status == 0:
+        raise WindowsEnvironError
+
+
+def _get_windows_environ():
+    """Returns a unicode dict of the Windows environment.
+
+    Can raise WindowsEnvironError
+    """
+
+    res = GetEnvironmentStringsW()
+    if not res:
+        raise WindowsEnvironError
+
+    res = ctypes.cast(res, ctypes.POINTER(ctypes.c_wchar))
+
+    done = []
+    current = u""
+    i = 0
+    while 1:
+        c = res[i]
+        i += 1
+        if c == u"\x00":
+            if not current:
+                break
+            done.append(current)
+            current = u""
+            continue
+        current += c
+
+    dict_ = {}
+    for entry in done:
+        try:
+            key, value = entry.split(u"=", 1)
+        except ValueError:
+            continue
+        dict_[key] = value
+
+    status = FreeEnvironmentStringsW(res)
+    if status == 0:
+        raise WindowsEnvironError
+
+    return dict_
+
+
+class WindowsEnviron(collections.MutableMapping):
+    """os.environ that supports unicode on Windows.
+
+    Keys can either be ascii bytes or unicode
+
+    Like os.environ it will only contain the environment content present at
+    load time. Changes will be synced with the real environment.
+    """
+
+    def __init__(self):
+        try:
+            env = _get_windows_environ()
+        except WindowsEnvironError:
+            env = {}
+        self._env = env
+
+    def __getitem__(self, key):
+        if isinstance(key, bytes):
+            key = key.decode("ascii")
+
+        return self._env[key]
+
+    def __setitem__(self, key, value):
+        if isinstance(key, bytes):
+            key = key.decode("ascii")
+
+        try:
+            _set_windows_env_var(key, value)
+        except WindowsEnvironError:
+            pass
+        self._env[key] = value
+
+    def __delitem__(self, key):
+        if isinstance(key, bytes):
+            key = key.decode("ascii")
+
+        try:
+            _del_windows_env_var(key)
+        except WindowsEnvironError:
+            pass
+        del self._env[key]
+
+    def __iter__(self):
+        return iter(self._env)
+
+    def __len__(self):
+        return len(self._env)
+
+    def __repr__(self):
+        return repr(self._env)

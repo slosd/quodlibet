@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from tests import TestCase
 from helper import realized
 
@@ -7,7 +8,7 @@ from quodlibet import config
 
 from quodlibet.browsers.paned import PanedBrowser
 from quodlibet.browsers.paned.util import PaneConfig
-from quodlibet.browsers.paned.util import get_headers, save_headers
+from quodlibet.browsers.paned.util import get_headers
 from quodlibet.browsers.paned.models import AllEntry, UnknownEntry, SongsEntry
 from quodlibet.browsers.paned.models import PaneModel
 from quodlibet.browsers.paned.prefs import PatternEditor, Preferences
@@ -15,24 +16,25 @@ from quodlibet.browsers.paned.prefs import PreferencesButton
 from quodlibet.browsers.paned.pane import Pane
 from quodlibet.formats._audio import AudioFile
 from quodlibet.util.collection import Collection
+from quodlibet.util.path import fsnative
 from quodlibet.library import SongLibrary, SongLibrarian
 
 
 SONGS = [
     AudioFile({
         "title": "three", "artist": "boris", "genre": "Rock",
-        "~filename": "/bin/ls", "foo": "bar"}),
+        "~filename": fsnative(u"/bin/ls"), "foo": "bar"}),
     AudioFile({
         "title": "two", "artist": "mu", "genre": "Rock",
-        "~filename": "/dev/zero", "foo": "bar"}),
+        "~filename": fsnative(u"/dev/zero"), "foo": "bar"}),
     AudioFile({
         "title": "four", "artist": "piman", "genre": "J-Pop",
-        "~filename": "/dev/null", "foo": "bar\nquux"}),
+        "~filename": fsnative(u"/dev/null"), "foo": "bar\nquux"}),
     AudioFile({
         "title": "one", "artist": "piman", "genre": "J-Pop",
-        "~filename": "/bin/foo", "foo": "bar\nnope"}),
+        "~filename": fsnative(u"/bin/foo"), "foo": "bar\nnope"}),
     AudioFile({
-        "title": "xxx", "~filename": "/bin/bar", "foo": "bar"}),
+        "title": "xxx", "~filename": fsnative(u"/bin/bar"), "foo": "bar"}),
 ]
 SONGS.sort()
 
@@ -55,7 +57,7 @@ class TPanedBrowser(TestCase):
         for af in SONGS:
             af.sanitize()
         library.add(SONGS)
-        self.bar = self.Bar(library, False)
+        self.bar = self.Bar(library)
 
         self.last = None
         self.emit_count = 0
@@ -149,9 +151,6 @@ class TPanedBrowser(TestCase):
     def test_wide_mode(self):
         self.bar.set_all_wide_mode(True)
         self.bar.set_all_wide_mode(False)
-
-    def test_commands(self):
-        self.failUnless("query" in self.bar.commands)
 
     def tearDown(self):
         self.bar.destroy()

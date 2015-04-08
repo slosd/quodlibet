@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2011,2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -7,6 +8,7 @@
 from gi.repository import Gtk, Pango, GLib
 
 from quodlibet.qltk import Button, Window
+from quodlibet.util import connect_obj
 
 from .acoustid import AcoustidSubmissionThread
 from .analyze import FingerPrintPool
@@ -56,10 +58,7 @@ class FingerprintDialog(Window):
         self.__stats = stats = Gtk.Label()
         stats.set_alignment(0, 0.5)
         expand = Gtk.Expander.new_with_mnemonic(_("_Details"))
-        align = Gtk.Alignment.new(0.0, 0.0, 1.0, 1.0)
-        align.set_padding(6, 0, 6, 0)
-        expand.add(align)
-        align.add(stats)
+        expand.add(stats)
 
         def expand_cb(expand, *args):
             self.resize(self.get_size()[0], 1)
@@ -84,11 +83,11 @@ class FingerprintDialog(Window):
         submit.set_sensitive(False)
         submit.connect('clicked', self.__submit_cb)
         cancel = Gtk.Button(stock=Gtk.STOCK_CANCEL)
-        cancel.connect_object('clicked', self.__cancel_cb, pool)
+        connect_obj(cancel, 'clicked', self.__cancel_cb, pool)
         bbox.pack_start(submit, True, True, 0)
         bbox.pack_start(cancel, True, True, 0)
 
-        outer_box.pack_start(box, False, True, 0)
+        outer_box.pack_start(box, True, True, 0)
         outer_box.pack_start(bbox, False, True, 0)
 
         pool.connect('fingerprint-done', self.__fp_done_cb)
@@ -98,7 +97,7 @@ class FingerprintDialog(Window):
         for song in songs:
             pool.push(song)
 
-        self.connect_object('delete-event', self.__cancel_cb, pool)
+        connect_obj(self, 'delete-event', self.__cancel_cb, pool)
 
         self.add(outer_box)
         self.show_all()
@@ -113,11 +112,14 @@ class FingerprintDialog(Window):
         text = _("Songs either need a <i><b>musicbrainz_trackid</b></i>, "
             "or <i><b>artist</b></i> / "
             "<i><b>title</b></i> / <i><b>album</b></i> tags to get submitted.")
-        text += _("\n\n<i>Fingerprints:</i> %d/%d") % (valid_fp, all_)
-        text += _("\n<i>Songs with MBIDs:</i> %d/%d") % (got_mbid, all_)
-        text += _("\n<i>Songs with sufficient tags:</i> %d/%d") % (
-            got_meta, all_)
-        text += _("\n<i>Songs to submit:</i> %d/%d") % (to_send, all_)
+        text += "\n\n" + "<i>%s</i>" % _("Fingerprints:")
+        text += " %d/%d" % (valid_fp, all_)
+        text += "\n" + "<i>%s</i>" % _("Songs with MBIDs:")
+        text += " %d/%d" % (got_mbid, all_)
+        text += "\n" + "<i>%s</i>" % _("Songs with sufficient tags:")
+        text += " %d/%d" % (got_meta, all_)
+        text += "\n" + "<i>%s</i>" % _("Songs to submit:")
+        text += " %d/%d" % (to_send, all_)
         self.__stats.set_markup(text)
 
     def __set_fraction(self, progress):
@@ -154,7 +156,8 @@ class FingerprintDialog(Window):
         results = self.__fp_results.values()
         to_send = len(filter(can_submit, results))
         self.__label_song.set_text(
-            _("Done. %d/%d songs to submit.") % (to_send, all_))
+            _("Done. %(to-send)d/%(all)d songs to submit.") % {
+                "to-send": to_send, "all": all_})
 
     def __cancel_cb(self, pool, *args):
         self.destroy()
@@ -169,7 +172,7 @@ class FingerprintDialog(Window):
 
     def __submit_cb(self, *args):
         self.__submit.set_sensitive(False)
-        self.__label.set_markup("<b>%s</b>" % _("Submitting Fingerprints:"))
+        self.__label.set_markup("<b>%s</b>" % _("Submitting fingerprints:"))
         self.__set_fraction(0)
         self.__acoustid_thread = AcoustidSubmissionThread(
             filter(can_submit, self.__fp_results.values()),
@@ -177,7 +180,7 @@ class FingerprintDialog(Window):
 
     def __acoustid_update(self, progress):
         self.__set_fraction(progress)
-        self.__label_song.set_text(_("Submitting..."))
+        self.__label_song.set_text(_(u"Submitting…"))
 
     def __acoustid_done(self):
         self.__acoustid_thread.join()

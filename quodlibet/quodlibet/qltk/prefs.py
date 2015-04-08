@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # Copyright 2004-2009 Joe Wreschnig, Michael Urman, Iñigo Serna,
 #                     Steven Robertson
-#           2011-2014 Nick Boultbee
-#           2013 Christoph Reiter
+#           2011-2013 Nick Boultbee
+#           2013      Christoph Reiter
+#           2014      Jan Path
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
@@ -15,21 +16,24 @@ from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
 from quodlibet import app
-from quodlibet.config import RatingsPrefs, RATINGS
+from quodlibet.config import RATINGS
 
-from quodlibet.parse import Query
 from quodlibet.qltk.ccb import ConfigCheckButton as CCB
 from quodlibet.qltk.data_editors import MultiStringEditor
-from quodlibet.qltk.entry import ValidatingEntry, UndoEntry
+from quodlibet.qltk.entry import ValidatingEntry, UndoEntry, QueryValidator
 from quodlibet.qltk.scanbox import ScanBox
 from quodlibet.qltk.maskedbox import MaskedBox
-from quodlibet.qltk.songlist import SongList
+from quodlibet.qltk.songlist import SongList, get_columns
+from quodlibet.qltk.window import UniqueWindow
+from quodlibet.qltk.x import Button, Align
+from quodlibet.qltk import icons
 from quodlibet.util import copool
 from quodlibet.util.dprint import print_d
 from quodlibet.util.library import emit_signal, get_scan_dirs, scan_library
+from quodlibet.util import connect_obj
 
 
-class PreferencesWindow(qltk.UniqueWindow):
+class PreferencesWindow(UniqueWindow):
     """The tabbed container window for the main preferences GUI.
     Individual tabs are encapsulated as inner classes inheriting from `VBox`"""
 
@@ -50,7 +54,7 @@ class PreferencesWindow(qltk.UniqueWindow):
             ("~basename", _("_Filename")),
 
             ("~#length", _("_Length")),
-            ("~#rating", _("_Rating")),
+            ("~rating", _("_Rating")),
             ("~#filesize", util.tag("~#filesize"))]
 
         def __init__(self):
@@ -72,7 +76,7 @@ class PreferencesWindow(qltk.UniqueWindow):
             vbox = Gtk.VBox(spacing=12)
             buttons = {}
             table = Gtk.Table.new(3, 3, True)
-            cols = config.get_columns(refresh=True)
+            cols = get_columns()
 
             for i, (k, t) in enumerate(self.PREDEFINED_TAGS):
                 x, y = i % 3, i / 3
@@ -93,7 +97,8 @@ class PreferencesWindow(qltk.UniqueWindow):
             self.others = others = UndoEntry()
             others.set_sensitive(False)
             # Stock edit doesn't have ellipsis chars.
-            edit_button = Gtk.Button(label=_("_Edit..."), use_underline=True)
+            edit_button = Gtk.Button(
+                label=_(u"_Edit…"), use_underline=True)
             edit_button.connect("clicked", self.__config_cols)
             edit_button.set_tooltip_text(_("Add or remove additional column "
                                            "headers"))
@@ -167,7 +172,7 @@ class PreferencesWindow(qltk.UniqueWindow):
 
             on_to_off = dict((on, off) for (w, off, on) in self._toggle_data)
             result = []
-            cur_cols = config.get_columns(refresh=True)
+            cur_cols = get_columns()
             for h in cur_cols:
                 if h in new_headers:
                     result.append(h)
@@ -214,7 +219,7 @@ class PreferencesWindow(qltk.UniqueWindow):
             hb = Gtk.HBox(spacing=6)
             l = Gtk.Label(label=_("_Global filter:"))
             l.set_use_underline(True)
-            e = ValidatingEntry(Query.is_valid_color)
+            e = ValidatingEntry(QueryValidator)
             e.set_text(config.get("browsers", "background"))
             e.connect('changed', self._entry, 'background', 'browsers')
             e.set_tooltip_text(_("Apply this query in addition to all others"))
@@ -224,7 +229,7 @@ class PreferencesWindow(qltk.UniqueWindow):
             vb.pack_start(hb, False, True, 0)
 
             # Translators: The heading of the preference group, no action
-            f = qltk.Frame(Q_("heading|Search"), child=vb)
+            f = qltk.Frame(C_("heading", "Search"), child=vb)
             self.pack_start(f, False, True, 0)
 
             # Ratings
@@ -250,7 +255,8 @@ class PreferencesWindow(qltk.UniqueWindow):
             c = CCB(_("_Use rounded corners on thumbnails"),
                     'albumart', 'round', populate=True,
                     tooltip=_("Round the corners of album artwork thumbnail "
-                              "images. May require restart to take effect."))
+                              "images."))
+            c.connect('toggled', self.__toggle_round_corners)
             vb.pack_start(c, False, True, 0)
 
             # Filename choice algorithm config
@@ -286,6 +292,9 @@ class PreferencesWindow(qltk.UniqueWindow):
 
         def __changed_text(self, entry, name):
             config.set('albumart', name, entry.get_text())
+
+        def __toggle_round_corners(self, *args):
+            qltk.redraw_all_toplevels()
 
         def __toggled_force_filename(self, cb, fn_entry):
             fn_entry.set_sensitive(cb.get_active())
@@ -349,16 +358,16 @@ class PreferencesWindow(qltk.UniqueWindow):
             table.attach(c, 0, 2, 0, 1)
             fb_label.set_alignment(0, 0.5)
             table.attach(fb_label, 0, 1, 1, 2,
-                         xoptions=0)
+                         xoptions=Gtk.AttachOptions.FILL)
             pre_label.set_alignment(0, 0.5)
             table.attach(pre_label, 0, 1, 2, 3,
-                         xoptions=0)
+                         xoptions=Gtk.AttachOptions.FILL)
 
-            fb_align = Gtk.Alignment.new(0, 0.5, 0, 1)
+            fb_align = Align(halign=Gtk.Align.START)
             fb_align.add(fb_spin)
             table.attach(fb_align, 1, 2, 1, 2)
 
-            pre_align = Gtk.Alignment.new(0, 0.5, 0, 1)
+            pre_align = Align(halign=Gtk.Align.START)
             pre_align.add(pre_spin)
             table.attach(pre_align, 1, 2, 2, 3)
 
@@ -405,6 +414,7 @@ class PreferencesWindow(qltk.UniqueWindow):
                 if it is None:
                     return
                 RATINGS.default = model[it][0]
+                qltk.redraw_all_toplevels()
 
             def populate_default_rating_model(combo, num):
                 model = combo.get_model()
@@ -433,7 +443,7 @@ class PreferencesWindow(qltk.UniqueWindow):
             # Rating Scale
             model = Gtk.ListStore(int)
             scale_combo = Gtk.ComboBox(model=model)
-            scale_lab = Gtk.Label(label=_("Rating _Scale:"))
+            scale_lab = Gtk.Label(label=_("Rating _scale:"))
             scale_lab.set_use_underline(True)
             scale_lab.set_mnemonic_widget(scale_combo)
 
@@ -461,18 +471,16 @@ class PreferencesWindow(qltk.UniqueWindow):
             scale_combo.set_cell_data_func(cell, draw_rating_scale, None)
             scale_combo.connect('changed', rating_scale_changed, model)
 
-            default_align = Gtk.Alignment(xalign=0, xscale=0)
+            default_align = Align(halign=Gtk.Align.START)
             default_align.add(default_lab)
-            default_combo_align = Gtk.Alignment(xalign=0, xscale=0)
-            default_combo_align.add(default_combo)
-            scale_align = Gtk.Alignment(xalign=0, xscale=0)
+            scale_align = Align(halign=Gtk.Align.START)
             scale_align.add(scale_lab)
 
             grid = Gtk.Grid(column_spacing=6, row_spacing=6)
             grid.add(scale_align)
             grid.add(scale_combo)
             grid.attach(default_align, 0, 1, 1, 1)
-            grid.attach(default_combo_align, 1, 1, 1, 1)
+            grid.attach(default_combo, 1, 1, 1, 1)
             vb.pack_start(grid, False, False, 6)
 
             # Bayesian Factor
@@ -523,11 +531,6 @@ class PreferencesWindow(qltk.UniqueWindow):
                      'auto_save_changes', populate=True,
                      tooltip=_("Save changes to tags without confirmation "
                                "when editing multiple files"))
-            vbox.pack_start(cb, False, True, 0)
-            cb = CCB(_("Show _programmatic tags"),
-                     'editing', 'alltags', populate=True,
-                     tooltip=_("Access all tags, including machine-generated "
-                               "ones e.g. MusicBrainz or Replay Gain tags"))
             vbox.pack_start(cb, False, True, 0)
             hb = Gtk.HBox(spacing=6)
             e = UndoEntry()
@@ -608,7 +611,7 @@ class PreferencesWindow(qltk.UniqueWindow):
             reload_.connect("clicked", reload_cb)
             reload_.set_tooltip_text(
                 _("Reload all songs in your library. "
-                  "(this can take a long time)"))
+                  "This can take a long time."))
 
             refresh_cb = CCB(_("_Refresh library on start"),
                              "library", "refresh_on_start", populate=True)
@@ -645,27 +648,43 @@ class PreferencesWindow(qltk.UniqueWindow):
         super(PreferencesWindow, self).__init__()
         self.current_scan_dirs = get_scan_dirs()
         self.set_title(_("Preferences") + " - Quod Libet")
-        self.set_border_width(12)
         self.set_resizable(False)
         self.set_transient_for(qltk.get_top_parent(parent))
 
         self.__notebook = notebook = qltk.Notebook()
         for Page in [self.SongList, self.Browsers, self.Player,
                      self.Library, self.Tagging]:
-            notebook.append_page(Page())
+            page = Page()
+            page.show()
+            notebook.append_page(page)
 
-        close = Gtk.Button(stock=Gtk.STOCK_CLOSE)
-        close.connect_object('clicked', lambda x: x.destroy(), self)
+        page_name = config.get("memory", "prefs_page", "")
+        self.set_page(page_name)
+
+        def on_switch_page(notebook, page, page_num):
+            config.set("memory", "prefs_page", page.name)
+
+        notebook.connect("switch-page", on_switch_page)
+
+        close = Button(_("_Close"), icons.WINDOW_CLOSE)
+        connect_obj(close, 'clicked', lambda x: x.destroy(), self)
         button_box = Gtk.HButtonBox()
         button_box.set_layout(Gtk.ButtonBoxStyle.END)
         button_box.pack_start(close, True, True, 0)
 
-        vbox = Gtk.VBox(spacing=12)
-        vbox.pack_start(notebook, True, True, 0)
-        vbox.pack_start(button_box, False, True, 0)
-        self.add(vbox)
+        self.use_header_bar()
+        if self.has_close_button():
+            self.set_border_width(0)
+            notebook.set_show_border(False)
+            self.add(notebook)
+        else:
+            self.set_border_width(12)
+            vbox = Gtk.VBox(spacing=12)
+            vbox.pack_start(notebook, True, True, 0)
+            vbox.pack_start(button_box, False, True, 0)
+            self.add(vbox)
 
-        self.connect_object('destroy', PreferencesWindow.__destroy, self)
+        connect_obj(self, 'destroy', PreferencesWindow.__destroy, self)
 
         self.get_child().show_all()
 

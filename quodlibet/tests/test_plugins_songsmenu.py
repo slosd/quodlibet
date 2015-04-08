@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from quodlibet.library import SongLibrary
 from quodlibet.plugins.songsmenu import SongsMenuPlugin
 from tests import TestCase, mkstemp, mkdtemp
@@ -12,14 +13,14 @@ from tests.helper import capture_output
 
 class TSongsMenuPlugins(TestCase):
 
-    def _confirmer(self, msg):
+    def _confirmer(self, *args):
         self.confirmed = True
 
     def setUp(self):
         self.tempdir = mkdtemp()
         self.pm = PluginManager(folders=[self.tempdir])
         self.confirmed = False
-        self.handler = SongsMenuPluginHandler(self._confirmer)
+        self.handler = SongsMenuPluginHandler(self._confirmer, self._confirmer)
         self.pm.register_handler(self.handler)
         self.pm.rescan()
         self.assertEquals(self.pm.plugins, [])
@@ -107,12 +108,12 @@ class TSongsMenuPlugins(TestCase):
         plug = self.pm.plugins[0]
         self.pm.enable(plug, True)
         with capture_output():
-            menu = self.handler.Menu(None, None, [AudioFile()])
+            menu = self.handler.Menu(None, [AudioFile()])
         self.failIf(menu and menu.get_children())
 
     def test_Menu(self):
         self.create_plugin(name='Name', desc='Desc', funcs=['plugin_song'])
-        self.handler.Menu(None, None, [AudioFile()])
+        self.handler.Menu(None, [AudioFile()])
 
     def test_handling_songs_without_confirmation(self):
         plugin = Plugin(FakeSongsMenuPlugin)
@@ -141,8 +142,8 @@ class FakeSongsMenuPlugin(SongsMenuPlugin):
     PLUGIN_ID = "SongsMunger"
     MAX_INVOCATIONS = 50
 
-    def __init__(self, songs, library, window):
-        super(FakeSongsMenuPlugin, self).__init__(songs, library, window)
+    def __init__(self, songs, library):
+        super(FakeSongsMenuPlugin, self).__init__(songs, library)
         self.total = 0
 
     def plugin_song(self, song):

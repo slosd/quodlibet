@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright 2013 Christoph Reiter
 #
 # This program is free software; you can redistribute it and/or modify
@@ -5,10 +6,7 @@
 # published by the Free Software Foundation
 
 import os
-import glob
 import sys
-import subprocess
-import unittest
 
 try:
     from pyflakes.scripts import pyflakes
@@ -20,10 +18,9 @@ from tests import TestCase, skipUnless
 
 class FakeStream(object):
     # skip these, can be false positives
-    BL = ["imported but unused",
-          "redefinition of unused",
-          "unable to detect undefined names",
-          "redefinition of function"]
+    BL = [
+        "unable to detect undefined names",
+    ]
 
     def __init__(self):
         self.lines = []

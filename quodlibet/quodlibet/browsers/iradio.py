@@ -23,18 +23,18 @@ from quodlibet.browsers._base import Browser
 from quodlibet.formats.remote import RemoteFile
 from quodlibet.formats._audio import TAG_TO_SORT, MIGRATE, AudioFile
 from quodlibet.library import SongLibrary
-from quodlibet.parse import Query
+from quodlibet.query import Query
 from quodlibet.qltk.getstring import GetStringDialog
 from quodlibet.qltk.songsmenu import SongsMenu
 from quodlibet.qltk.notif import Task
-from quodlibet.util import copool, gobject_weak, sanitize_tags
+from quodlibet.util import copool, connect_destroy, sanitize_tags, connect_obj
 from quodlibet.util.string import decode, encode
 from quodlibet.util.uri import URI
 from quodlibet.qltk.views import AllTreeView
 from quodlibet.qltk.searchbar import SearchBarBox
 from quodlibet.qltk.completion import LibraryTagCompletion
-from quodlibet.qltk.x import MenuItem, Alignment, ScrolledWindow
-from quodlibet.qltk.x import SymbolicIconImage, SeparatorMenuItem
+from quodlibet.qltk.x import MenuItem, Align, ScrolledWindow
+from quodlibet.qltk.x import SymbolicIconImage
 from quodlibet.qltk.menubutton import MenuButton
 
 STATION_LIST_URL = \
@@ -481,6 +481,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
     name = _("Internet Radio")
     accelerated_name = _("_Internet Radio")
     priority = 16
+    uses_main_library = False
     headers = "title artist ~people grouping genre website ~format " \
         "channel-mode".split()
 
@@ -526,7 +527,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         if not self.instances():
             self._destroy()
 
-    def __init__(self, library, main):
+    def __init__(self, library):
         super(InternetRadio, self).__init__(spacing=12)
 
         if not self.instances():
@@ -539,14 +540,14 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         self.accelerators = Gtk.AccelGroup()
         self.__searchbar = search = SearchBarBox(completion=completion,
                                                  accel_group=self.accelerators)
-        gobject_weak(search.connect, 'query-changed', self.__filter_changed)
+        search.connect('query-changed', self.__filter_changed)
 
         menu = Gtk.Menu()
-        new_item = MenuItem(_("_New Station..."), Gtk.STOCK_ADD)
-        gobject_weak(new_item.connect, 'activate', self.__add)
+        new_item = MenuItem(_(u"_New Station…"), Gtk.STOCK_ADD)
+        new_item.connect('activate', self.__add)
         menu.append(new_item)
         update_item = MenuItem(_("_Update Stations"), Gtk.STOCK_REFRESH)
-        gobject_weak(update_item.connect, 'activate', self.__update)
+        update_item.connect('activate', self.__update)
         menu.append(update_item)
         menu.show_all()
 
@@ -557,7 +558,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
 
         def focus(widget, *args):
             qltk.get_top_parent(widget).songlist.grab_focus()
-        gobject_weak(search.connect, 'focus-out', focus, parent=self)
+        search.connect('focus-out', focus)
 
         # treeview
         scrolled_window = ScrolledWindow()
@@ -614,16 +615,13 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         # selection
         selection = view.get_selection()
         selection.set_mode(Gtk.SelectionMode.MULTIPLE)
-        self.__changed_sig = gobject_weak(selection.connect, 'changed',
-            util.DeferredSignal(lambda x: self.activate()), parent=view)
+        self.__changed_sig = connect_destroy(selection, 'changed',
+            util.DeferredSignal(lambda x: self.activate()))
 
         box = Gtk.HBox(spacing=6)
         box.pack_start(search, True, True, 0)
         box.pack_start(button, False, True, 0)
-        if main:
-            self._searchbox = Alignment(box, left=0, right=6, top=6)
-        else:
-            self._searchbox = box
+        self._searchbox = Align(box, left=0, right=6, top=6)
         self._searchbox.show_all()
 
         def qbar_response(infobar, response_id):
@@ -635,7 +633,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         if self._is_library_empty():
             self.qbar.show()
 
-        pane = qltk.RHPaned()
+        pane = qltk.ConfigRHPaned("browsers", "internetradio_pos", 0.4)
         pane.show()
         pane.pack1(scrolled_window, resize=False, shrink=False)
         songbox = Gtk.VBox(spacing=6)
@@ -735,9 +733,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         self.__stations.add(to_add)
 
     def __filter_changed(self, bar, text, restore=False):
-        self.__filter = None
-        if not Query.match_all(text):
-            self.__filter = Query(text, self.STAR)
+        self.__filter = Query(text, self.STAR)
 
         if not restore:
             self.activate()
@@ -823,12 +819,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         if irfs:
             self.__fav_stations.add(irfs)
 
-    def Menu(self, songs, songlist, library):
-        menu = SongsMenu(self.__librarian, songs, playlists=False, remove=True,
-                         queue=False, devices=False, parent=self)
-
-        menu.prepend(SeparatorMenuItem())
-
+    def Menu(self, songs, library, items):
         in_fav = False
         in_all = False
         for song in songs:
@@ -839,18 +830,19 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
             if in_fav and in_all:
                 break
 
-        button = MenuItem(_("Remove from Favorites"), Gtk.STOCK_REMOVE)
-        button.set_sensitive(in_fav)
-        gobject_weak(button.connect_object, 'activate',
-                     self.__remove_fav, songs)
-        menu.prepend(button)
-
+        iradio_items = []
         button = MenuItem(_("Add to Favorites"), Gtk.STOCK_ADD)
         button.set_sensitive(in_all)
-        gobject_weak(button.connect_object, 'activate',
-                     self.__add_fav, songs)
-        menu.prepend(button)
+        connect_obj(button, 'activate', self.__add_fav, songs)
+        iradio_items.append(button)
+        button = MenuItem(_("Remove from Favorites"), Gtk.STOCK_REMOVE)
+        button.set_sensitive(in_fav)
+        connect_obj(button, 'activate', self.__remove_fav, songs)
+        iradio_items.append(button)
 
+        items.append(iradio_items)
+        menu = SongsMenu(self.__librarian, songs, playlists=False, remove=True,
+                         queue=False, devices=False, items=items)
         return menu
 
     def restore(self):
@@ -875,26 +867,29 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
 
     def __get_filter(self):
         filter_ = self.__get_selection_filter()
+        text_filter = self.__filter or Query("")
 
         if filter_:
-            if self.__filter:
-                filter_ &= self.__filter
+            filter_ &= text_filter
         else:
-            filter_ = self.__filter
+            filter_ = text_filter
 
         return filter_
+
+    def can_filter_text(self):
+        return True
+
+    def filter_text(self, text):
+        self.__searchbar.set_text(text)
+        if Query.is_parsable(text):
+            self.__filter_changed(self.__searchbar, text)
+            self.activate()
 
     def activate(self):
         filter_ = self.__get_filter()
         libs = self.__get_selected_libraries()
-        songs = itertools.chain(*libs)
-
-        if filter_:
-            songs = filter(filter_.search, songs)
-        else:
-            songs = list(songs)
-
-        self.emit('songs-selected', songs, None)
+        songs = filter_.filter(itertools.chain(*libs))
+        self.songs_selected(songs)
 
     def active_filter(self, song):
         for lib in self.__get_selected_libraries():
@@ -933,8 +928,8 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
             # in case nothing matches, select all
             path = (0,)
 
-        self.view.scroll_to_cell(path, use_align=True, row_align=0.5)
         self.view.set_cursor(path)
+        self.view.scroll_to_cell(path, use_align=True, row_align=0.5)
 
     def statusbar(self, i):
         return ngettext("%(count)d station", "%(count)d stations", i)

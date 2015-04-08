@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # brainz.py - Quod Libet plugin to tag files from MusicBrainz automatically
 # Copyright 2005-2010   Joshua Kwan <joshk@triplehelix.org>,
 #                       Michael Ball <michael.ball@gmail.com>,
@@ -118,10 +119,10 @@ class ResultTreeView(HintedTreeView, MultiDragTreeView):
         self.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
 
         cols = [
-                ('Filename', self.__name_datafunc, True),
-                ('Track', self.__track_datafunc, False),
-                ('Title', self.__title_datafunc, True),
-                ('Artist', self.__artist_datafunc, True),
+                (_('Filename'), self.__name_datafunc, True),
+                (_('Track'), self.__track_datafunc, False),
+                (_('Title'), self.__title_datafunc, True),
+                (_('Artist'), self.__artist_datafunc, True),
             ]
 
         for title, func, resize in cols:
@@ -191,7 +192,7 @@ class ReleaseEventComboBox(Gtk.HBox):
         self.combo.pack_start(render, True)
         self.combo.add_attribute(render, "markup", 1)
         self.combo.set_sensitive(False)
-        self.label = Gtk.Label(label="_Release:", use_underline=True)
+        self.label = Gtk.Label(label=_("_Release:"), use_underline=True)
         self.label.set_use_underline(True)
         self.label.set_mnemonic_widget(self.combo)
         self.pack_start(self.label, False, True, 0)
@@ -348,10 +349,11 @@ class SearchWindow(Gtk.Dialog):
         """Search for album using the query text."""
         query = self.search_query.get_text()
         if not query:
-            self.result_label.set_markup("<b>Please enter a query.</b>")
+            self.result_label.set_markup(
+                "<b>%s</b>" % _("Please enter a query."))
             self.search_button.set_sensitive(True)
             return
-        self.result_label.set_markup("<i>Searching...</i>")
+        self.result_label.set_markup("<i>%s</i>" % _(u"Searching…"))
         filt = ws.ReleaseFilter(query=query)
         self._qthread.add(self.__process_results,
                          self._query.getReleases, filt)
@@ -361,16 +363,16 @@ class SearchWindow(Gtk.Dialog):
         self._resultlist.clear()
         self.search_button.set_sensitive(True)
         if results is None:
-            self.result_label.set_text("Error encountered. Please retry.")
+            self.result_label.set_text(_("Error encountered. Please retry."))
             self.search_button.set_sensitive(True)
             return
         for release in map(lambda r: r.release, results):
             self._resultlist.append((release, ))
         if len(results) > 0 and self.result_combo.get_active() == -1:
-            self.result_label.set_markup("<i>Loading result...</i>")
+            self.result_label.set_markup("<i>%s</i>" % _(u"Loading result…"))
             self.result_combo.set_active(0)
         else:
-            self.result_label.set_markup("No results found.")
+            self.result_label.set_markup(_("No results found."))
 
     def __result_changed(self, combo):
         """Called when a release is chosen from the result combo."""
@@ -381,7 +383,7 @@ class SearchWindow(Gtk.Dialog):
         if rel_id in self._releasecache:
             self.__update_results(self._releasecache[rel_id])
         else:
-            self.result_label.set_markup("<i>Loading result...</i>")
+            self.result_label.set_markup("<i>%s</i>" % _(u"Loading result…"))
             inc = ws.ReleaseIncludes(
                     artist=True, releaseEvents=True, tracks=True)
             self._qthread.add(self.__update_result,
@@ -411,7 +413,7 @@ class SearchWindow(Gtk.Dialog):
         self._qthread = QueryThread()
         self.current_release = None
 
-        super(SearchWindow, self).__init__("MusicBrainz lookup", buttons=(
+        super(SearchWindow, self).__init__(_("MusicBrainz lookup"), buttons=(
                     Gtk.STOCK_CANCEL, Gtk.ResponseType.REJECT,
                     Gtk.STOCK_SAVE, Gtk.ResponseType.ACCEPT))
         self.set_default_size(650, 500)
@@ -436,10 +438,10 @@ class SearchWindow(Gtk.Dialog):
         sq.set_text('%s AND tracks:%d' %
                 (alb, get_trackcount(album)))
 
-        lbl = Gtk.Label(label="_Query:")
+        lbl = Gtk.Label(label=_("_Query:"))
         lbl.set_use_underline(True)
         lbl.set_mnemonic_widget(sq)
-        stb = self.search_button = Gtk.Button('S_earch', use_underline=True)
+        stb = self.search_button = Gtk.Button(_('S_earch'), use_underline=True)
         stb.connect('clicked', self.__do_query)
         hb.pack_start(lbl, False, True, 0)
         hb.pack_start(sq, True, True, 0)
@@ -452,7 +454,7 @@ class SearchWindow(Gtk.Dialog):
 
         rhb = Gtk.HBox()
         rl = Gtk.Label()
-        rl.set_markup("Results <i>(drag to reorder)</i>")
+        rl.set_markup(_("Results <i>(drag to reorder)</i>"))
         rl.set_alignment(0, 0.5)
         rhb.pack_start(rl, False, True, 0)
         rl = self.result_label = Gtk.Label(label="")
@@ -480,10 +482,9 @@ class SearchWindow(Gtk.Dialog):
 
 class MyBrainz(SongsMenuPlugin):
     PLUGIN_ID = "MusicBrainz lookup"
-    PLUGIN_NAME = "MusicBrainz Lookup"
+    PLUGIN_NAME = _("MusicBrainz Lookup")
     PLUGIN_ICON = Gtk.STOCK_CDROM
-    PLUGIN_DESC = 'Retag an album based on a MusicBrainz search.'
-    PLUGIN_VERSION = '0.5'
+    PLUGIN_DESC = _('Re-tags an album based on a MusicBrainz search.')
 
     cache = {}
 
@@ -508,13 +509,14 @@ class MyBrainz(SongsMenuPlugin):
     @classmethod
     def PluginPreferences(self, win):
         items = [
-            ('split_disc', 'Split _disc from album', True),
-            ('split_feat', 'Split _featured performers from track', False),
-            ('year_only', 'Only use year for "date" tag', False),
-            ('albumartist', 'Write "_albumartist" when needed', True),
-            ('artist_sort', 'Write sort tags for artist names', False),
-            ('standard', 'Write _standard MusicBrainz tags', True),
-            ('labelid', 'Write _labelid tag (fixes multi-disc albums)', True),
+            ('split_disc', _('Split _disc from album'), True),
+            ('split_feat', _('Split _featured performers from track'), False),
+            ('year_only', _('Only use year for "date" tag'), False),
+            ('albumartist', _('Write "_albumartist" when needed'), True),
+            ('artist_sort', _('Write sort tags for artist names'), False),
+            ('standard', _('Write _standard MusicBrainz tags'), True),
+            ('labelid',
+                _('Write _labelid tag (fixes multi-disc albums)'), True),
         ]
 
         vb = Gtk.VBox()
