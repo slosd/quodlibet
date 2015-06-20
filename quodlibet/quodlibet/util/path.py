@@ -14,12 +14,15 @@ import tempfile
 import codecs
 import shlex
 import urllib
-from quodlibet.const import FSCODING
 from quodlibet.util.string import decode
-from quodlibet import windows
+from . import windows
+from .misc import environ, get_fs_encoding
 
 if sys.platform == "darwin":
     from Foundation import NSString
+
+
+_FSCODING = get_fs_encoding()
 
 
 """
@@ -58,9 +61,9 @@ def fsdecode(s, note=True):
     if isinstance(s, unicode):
         return s
     elif note:
-        return decode(s, FSCODING)
+        return decode(s, _FSCODING)
     else:
-        return s.decode(FSCODING, 'replace')
+        return s.decode(_FSCODING, 'replace')
 
 
 """
@@ -75,14 +78,14 @@ There exist 3 types of paths:
 if sys.platform == "win32":
     # We use FSCODING to save paths in files for example,
     # so this should never change on Windows (like in glib)
-    assert FSCODING == "utf-8"
+    assert _FSCODING == "utf-8"
 
     def is_fsnative(path):
         """If path is a native path"""
 
         return isinstance(path, unicode)
 
-    def fsnative(path):
+    def fsnative(path=u""):
         """unicode -> native path"""
 
         assert isinstance(path, unicode)
@@ -116,9 +119,9 @@ else:
     def is_fsnative(path):
         return isinstance(path, bytes)
 
-    def fsnative(path):
+    def fsnative(path=u""):
         assert isinstance(path, unicode)
-        return path.encode(FSCODING, 'replace')
+        return path.encode(_FSCODING, 'replace')
 
     def glib2fsnative(path):
         assert isinstance(path, bytes)
@@ -141,7 +144,7 @@ def iscommand(s):
         return os.path.isfile(s) and os.access(s, os.X_OK)
     else:
         s = s.split()[0]
-        path = os.environ.get('PATH', '') or os.defpath
+        path = environ.get('PATH', '') or os.defpath
         for p in path.split(os.path.pathsep):
             p2 = os.path.join(p, s)
             if os.path.isfile(p2) and os.access(p2, os.X_OK):
@@ -442,3 +445,41 @@ else:
 
 def path_equal(p1, p2, canonicalise=False):
     return normalize_path(p1, canonicalise) == normalize_path(p2, canonicalise)
+
+
+def limit_path(path, ellipsis=True):
+    """Reduces the filename length of all filenames in the given path
+    to the common maximum length for current platform.
+
+    While the limits are depended on the file system and more restrictions
+    may apply, this covers the common case.
+    """
+
+    assert is_fsnative(path)
+
+    main, ext = os.path.splitext(path)
+    parts = main.split(sep)
+    for i, p in enumerate(parts):
+        # Limit each path section to 255 (bytes on linux, chars on win).
+        # http://en.wikipedia.org/wiki/Comparison_of_file_systems#Limits
+        limit = 255
+        if i == len(parts) - 1:
+            limit -= len(ext)
+
+        if len(p) > limit:
+            if ellipsis:
+                p = p[:limit - 2] + fsnative(u"..")
+            else:
+                p = p[:limit]
+        parts[i] = p
+
+    return sep.join(parts) + ext
+
+
+def get_home_dir():
+    """Returns the root directory of the user, /home/user or C:\\Users\\user"""
+
+    if os.name == "nt":
+        return windows.get_profile_dir()
+    else:
+        return expanduser("~")

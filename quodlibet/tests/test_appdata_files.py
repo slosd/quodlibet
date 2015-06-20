@@ -8,14 +8,16 @@
 import os
 import subprocess
 
-from tests import AbstractTestCase, mkstemp
+from quodlibet.util.path import iscommand
+
+from tests import TestCase, mkstemp, skipUnless
 
 
 QLDATA_DIR = os.path.join(os.path.dirname(
     os.path.dirname(os.path.realpath(__file__))), "data")
 
 
-class _TAppDataFile(AbstractTestCase):
+class _TAppDataFileMixin(object):
     PATH = None
 
     def test_filename(self):
@@ -39,20 +41,19 @@ class _TAppDataFile(AbstractTestCase):
         # pass to desktop-file-validate
         try:
             subprocess.check_output(
-                ["appdata-validate", "--nonet", name],
+                ["appstream-util", "validate", "--nonet", name],
                 stderr=subprocess.STDOUT)
-        except OSError:
-            # appdata-validate not available
-            return
         except subprocess.CalledProcessError as e:
             raise Exception(e.output)
         finally:
             os.remove(name)
 
 
-class TQLAppDataFile(_TAppDataFile):
+@skipUnless(iscommand("appstream-util"), "appstream-util not found")
+class TQLAppDataFile(TestCase, _TAppDataFileMixin):
     PATH = os.path.join(QLDATA_DIR, "quodlibet.appdata.xml.in")
 
 
-class TEFAppDataFile(_TAppDataFile):
+@skipUnless(iscommand("appstream-util"), "appstream-util not found")
+class TEFAppDataFile(TestCase, _TAppDataFileMixin):
     PATH = os.path.join(QLDATA_DIR, "exfalso.appdata.xml.in")

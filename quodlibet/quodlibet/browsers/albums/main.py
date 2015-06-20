@@ -17,8 +17,8 @@ from gi.repository import Gtk, Pango, Gdk, GLib, Gio
 from .prefs import Preferences, PATTERN
 from .models import AlbumModel, AlbumFilterModel, AlbumSortModel
 
+import quodlibet
 from quodlibet import config
-from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
 
@@ -43,7 +43,7 @@ from quodlibet.qltk.image import (get_pbosf_for_pixbuf, get_scale_factor,
     set_renderer_from_pbosf, add_border_widget)
 
 
-PATTERN_FN = os.path.join(const.USERDIR, "album_pattern")
+PATTERN_FN = os.path.join(quodlibet.get_user_dir(), "album_pattern")
 
 
 class AlbumTagCompletion(EntryWordCompletion):
@@ -330,8 +330,7 @@ class VisibleUpdate(object):
         self.__pending_paths = visible_paths
 
 
-class AlbumList(Browser, Gtk.VBox, util.InstanceTracker, VisibleUpdate):
-    __gsignals__ = Browser.__gsignals__
+class AlbumList(Browser, util.InstanceTracker, VisibleUpdate):
     __model = None
     __last_render = None
     __last_render_pb = None
@@ -407,6 +406,8 @@ class AlbumList(Browser, Gtk.VBox, util.InstanceTracker, VisibleUpdate):
 
     def __init__(self, library):
         super(AlbumList, self).__init__(spacing=6)
+        self.set_orientation(Gtk.Orientation.VERTICAL)
+
         self._register_instance()
         if self.__model is None:
             self._init_model(library)
@@ -697,6 +698,9 @@ class AlbumList(Browser, Gtk.VBox, util.InstanceTracker, VisibleUpdate):
             self.view.set_cursor((0,))
             self.__uninhibit()
             self.activate()
+
+    def get_filter_text(self):
+        return self.__search.get_text()
 
     def can_filter(self, key):
         # numerics are different for collections, and title

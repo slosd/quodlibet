@@ -15,11 +15,9 @@ from quodlibet.query import Query
 from quodlibet.qltk.songlist import SongList
 
 
-class EmptyBar(Gtk.VBox, Browser):
+class EmptyBar(Browser):
     """A browser that the user only interacts with indirectly, via the
     Filter menu. The VBox remains empty."""
-
-    __gsignals__ = Browser.__gsignals__
 
     name = _("Disable Browser")
     accelerated_name = _("_Disable Browser")
@@ -38,7 +36,7 @@ class EmptyBar(Gtk.VBox, Browser):
 
     def __init__(self, library):
         super(EmptyBar, self).__init__()
-        self._text = ""
+        self._text = u""
         self._query = None
         self._library = library
 
@@ -51,6 +49,9 @@ class EmptyBar(Gtk.VBox, Browser):
     def filter_text(self, text):
         self._text = text
         self.activate()
+
+    def get_filter_text(self):
+        return self._text
 
     def save(self):
         config.set("browsers", "query_text", self._text.encode('utf-8'))

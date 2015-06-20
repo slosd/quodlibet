@@ -660,6 +660,7 @@ class EditTags(Gtk.VBox):
         remove.set_sensitive(bool(rows))
 
     def __add_new_tag(self, model, tag, value):
+        assert isinstance(value, unicode)
         iters = [i for (i, v) in model.iterrows() if v.tag == tag]
         if iters and not self.__songinfo.can_multiple_values(tag):
             title = _("Unable to add tag")
@@ -688,6 +689,7 @@ class EditTags(Gtk.VBox):
                 break
             tag = add.get_tag()
             value = add.get_value()
+            assert isinstance(value, unicode)
             if tag in massagers.tags:
                 value = massagers.tags[tag].validate(value)
             if not self.__songinfo.can_change(tag):
@@ -815,23 +817,30 @@ class EditTags(Gtk.VBox):
             b.set_sensitive(not all_done)
 
     def __edit_tag(self, renderer, path, new_value, model):
+        new_value = new_value.decode("utf-8")
         new_value = ', '.join(new_value.splitlines())
         path = Gtk.TreePath.new_from_string(path)
         entry = model[path][0]
+        error_dialog = None
 
         if entry.tag in massagers.tags:
             fmt = massagers.tags[entry.tag]
             if not fmt.is_valid(new_value):
-                qltk.WarningMessage(
+                error_dialog = qltk.WarningMessage(
                     self, _("Invalid value"),
                     _("Invalid value: <b>%(value)s</b>\n\n%(error)s") % {
-                    "value": new_value, "error": fmt.error}).run()
-                return
+                    "value": new_value, "error": fmt.error})
             else:
                 new_value = fmt.validate(new_value)
 
         comment = entry.value
-        if comment.text != new_value and (new_value or comment.shared):
+        changed = comment.text != new_value
+        if (changed and ((comment.shared and comment.complete) or new_value)) \
+                or (new_value and comment.shared and not comment.complete):
+            # only give an error if we would have applied the value
+            if error_dialog is not None:
+                error_dialog.run()
+                return
             entry.value = Comment(new_value)
             entry.edited = True
             entry.deleted = False

@@ -9,20 +9,16 @@
 # published by the Free Software Foundation.
 
 import os
-import sys
 
-import quodlibet
 from quodlibet import app
 from quodlibet import util
 from quodlibet import const
 from quodlibet import config
-from quodlibet.util.path import fsdecode
-from quodlibet.util import set_win32_unicode_argv
+from quodlibet.util.path import fsdecode, fsnative
 
 
-def main():
-    global quodlibet
-
+def main(argv):
+    import quodlibet
     from quodlibet.qltk import add_signal_watch, icons
     add_signal_watch(app.quit)
 
@@ -31,11 +27,11 @@ def main():
         _("an audio tag editor"), "[%s]" % _("directory"))
 
     # FIXME: support unicode on Windows, sys.argv isn't good enough
-    sys.argv.append(os.path.abspath("."))
-    opts, args = opts.parse()
+    argv.append(os.path.abspath(fsnative(u".")))
+    opts, args = opts.parse(argv[1:])
     args[0] = os.path.realpath(args[0])
 
-    config.init(const.CONFIG)
+    config.init(os.path.join(quodlibet.get_user_dir(), "config"))
 
     app.name = "Ex Falso"
     app.id = "exfalso"
@@ -43,8 +39,9 @@ def main():
     quodlibet.init(icon=icons.EXFALSO, name=app.name, proc_title=app.id)
 
     import quodlibet.library
+    import quodlibet.player
     app.library = quodlibet.library.init()
-    app.player = quodlibet.init_backend("nullbe", app.librarian)
+    app.player = quodlibet.player.init_player("nullbe", app.librarian)
     from quodlibet.qltk.songlist import PlaylistModel
     app.player.setup(PlaylistModel(), None, 0)
     pm = quodlibet.init_plugins()
@@ -68,11 +65,10 @@ def main():
     quodlibet.main(app.window)
 
     quodlibet.finish_first_session(app.id)
-    config.save(const.CONFIG)
+    config.save()
 
     print_d("Finished shutdown.")
 
 
 if __name__ == "__main__":
-    set_win32_unicode_argv()
-    main()
+    main(util.argv)

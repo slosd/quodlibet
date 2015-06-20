@@ -13,8 +13,8 @@ import time
 
 from gi.repository import Gtk, GLib, Pango, Gdk
 
+import quodlibet
 from quodlibet import config
-from quodlibet import const
 from quodlibet import formats
 from quodlibet import qltk
 from quodlibet import util
@@ -28,10 +28,11 @@ from quodlibet.qltk.msg import ErrorMessage
 from quodlibet.qltk.songsmenu import SongsMenu
 from quodlibet.qltk.views import AllTreeView
 from quodlibet.util import connect_obj
+from quodlibet.util.path import get_home_dir
 from quodlibet.qltk.x import ScrolledWindow, Align, Button
 
 
-FEEDS = os.path.join(const.USERDIR, "feeds")
+FEEDS = os.path.join(quodlibet.get_user_dir(), "feeds")
 DND_URI_LIST, DND_MOZ_URL = range(2)
 
 # Migration path for pickle
@@ -212,9 +213,7 @@ class AddFeedDialog(GetStringDialog):
             return None
 
 
-class AudioFeeds(Browser, Gtk.VBox):
-    __gsignals__ = Browser.__gsignals__
-
+class AudioFeeds(Browser):
     __feeds = Gtk.ListStore(object)  # unread
 
     headers = ("title artist performer ~people album date website language "
@@ -225,7 +224,7 @@ class AudioFeeds(Browser, Gtk.VBox):
     priority = 20
     uses_main_library = False
 
-    __last_folder = const.HOME
+    __last_folder = get_home_dir()
 
     def pack(self, songpane):
         container = qltk.ConfigRHPaned("browsers", "audiofeeds_pos", 0.4)
@@ -347,6 +346,7 @@ class AudioFeeds(Browser, Gtk.VBox):
 
     def __init__(self, library):
         super(AudioFeeds, self).__init__(spacing=6)
+        self.set_orientation(Gtk.Orientation.VERTICAL)
 
         self.__view = view = AllTreeView()
         self.__render = render = Gtk.CellRendererText()

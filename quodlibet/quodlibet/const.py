@@ -3,9 +3,6 @@
 
 import sys
 import os
-import locale
-
-from . import windows
 
 
 class Version(tuple):
@@ -28,43 +25,8 @@ class MinVersions(object):
     PYTHON = Version(2, 7)
     MUTAGEN = Version(1, 22)
 
-VERSION_TUPLE = Version(3, 3, -1)
+VERSION_TUPLE = Version(3, 4, -1)
 VERSION = str(VERSION_TUPLE)
-
-if os.name == "nt":
-    file_path = __file__.decode(sys.getfilesystemencoding())
-    BASEDIR = os.path.dirname(os.path.realpath(file_path))
-    HOME = windows.get_personal_dir()
-    USERDIR = os.path.join(windows.get_appdate_dir(), "Quod Libet")
-    environ = windows.WindowsEnviron()
-else:
-    BASEDIR = os.path.dirname(os.path.realpath(__file__))
-    HOME = os.path.expanduser("~")
-    USERDIR = os.path.join(HOME, ".quodlibet")
-    environ = os.environ
-
-if 'QUODLIBET_USERDIR' in environ:
-    USERDIR = environ['QUODLIBET_USERDIR']
-
-IMAGEDIR = os.path.join(BASEDIR, "images")
-
-# XXX: Exec conf.py in this directory, used to override const globals
-# e.g. for setting USERDIR for the Windows portable version
-# Note: execfile doesn't handle unicode paths on windows, so encode.
-# (this doesn't use the old win api in case of str compared to os.*)
-_CONF_PATH = os.path.join(BASEDIR, "conf.py")
-if os.name == "nt":
-    _CONF_PATH = _CONF_PATH.encode(sys.getfilesystemencoding())
-try:
-    execfile(_CONF_PATH)
-except IOError:
-    pass
-
-CONTROL = os.path.join(USERDIR, "control")
-CONFIG = os.path.join(USERDIR, "config")
-CURRENT = os.path.join(USERDIR, "current")
-LIBRARY = os.path.join(USERDIR, "songs")
-LOGDIR = os.path.join(USERDIR, "logs")
 
 # entry point for the user guide / wiki
 BRANCH_NAME = "master"
@@ -75,7 +37,7 @@ ONLINE_HELP = DOCS_BASE_URL + "/guide/index.html"
 SEARCH_HELP = DOCS_BASE_URL + "/guide/searching.html"
 
 # Email used as default for reading/saving per-user data in tags, etc.
-EMAIL = environ.get("EMAIL", "quodlibet@lists.sacredchao.net")
+EMAIL = os.environ.get("EMAIL", "quodlibet@lists.sacredchao.net")
 
 # Displayed as registered / help email address
 SUPPORT_EMAIL = "quod-libet-development@googlegroups.com"
@@ -196,6 +158,7 @@ Michal Nowikowski (pl)
 Mugurel Tudor (ro)
 Mykola Lynnyk (uk)
 Naglis Jonaitis (lt)
+Nathan Follens (nl)
 Nick Boultbee (fr, en_GB)
 Olivier Gambier (fr)
 Piarres Beobide (eu)
@@ -225,48 +188,4 @@ Fabien Devaux
 DEFAULT_COLUMNS = "~#track ~people ~title~version ~album~discsubtitle " \
                   "~#length".split()
 
-TBP = os.path.join(USERDIR, "lists", "tagpatterns")
-TBP_EXAMPLES = """\
-<tracknumber>. <title>
-<tracknumber> - <title>
-<tracknumber> - <artist> - <title>
-<artist> - <album>/<tracknumber>. <title>
-<artist>/<album>/<tracknumber> - <title>"""
-
-NBP = os.path.join(USERDIR, "lists", "renamepatterns")
-NBP_EXAMPLES = """\
-<tracknumber>. <title>
-<tracknumber|<tracknumber>. ><title>
-<tracknumber> - <title>
-<tracknumber> - <artist> - <title>
-/path/<artist> - <album>/<tracknumber>. <title>
-/path/<artist>/<album>/<tracknumber> - <title>"""
-
-DEBUG = ("--debug" in sys.argv or "QUODLIBET_DEBUG" in environ)
-
-try:
-    ENCODING = locale.getpreferredencoding()
-except locale.Error:
-    ENCODING = "utf-8"
-else:
-    # python on macports can return a bugs result (empty string)
-    try:
-        u"".encode(ENCODING)
-    except LookupError:
-        ENCODING = "utf-8"
-
-if os.name == "nt":
-    FSCODING = "utf-8"
-else:
-    # http://developer.gnome.org/doc/API/2.0/glib/glib-running.html
-    if "G_FILENAME_ENCODING" in environ:
-        FSCODING = environ["G_FILENAME_ENCODING"].split(",")[0]
-        if FSCODING == "@locale":
-            FSCODING = ENCODING
-    elif "G_BROKEN_FILENAMES" in environ:
-        FSCODING = ENCODING
-    else:
-        FSCODING = "utf-8"
-
-del(os)
-del(locale)
+DEBUG = ("--debug" in sys.argv or "QUODLIBET_DEBUG" in os.environ)

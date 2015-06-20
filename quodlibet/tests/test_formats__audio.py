@@ -4,9 +4,11 @@ from tests import TestCase, DATA_DIR
 import os
 
 from quodlibet import config
-from quodlibet.util.path import is_fsnative, fsnative
+from quodlibet.util.path import is_fsnative, fsnative, fsdecode
 from quodlibet.formats._audio import AudioFile
 from quodlibet.formats._audio import INTERN_NUM_DEFAULT
+from quodlibet.formats import decode_value
+
 
 bar_1_1 = AudioFile({
     "~filename": fsnative(u"/fakepath/1"),
@@ -125,6 +127,10 @@ class TAudioFile(TestCase):
             self.failUnlessEqual(
                 song("~title~~#tracks"), song("~title~~#tracks"))
 
+    def test_tied_filename_numeric(self):
+        self.assertEqual(
+            bar_1_2("~~filename~~#originalyear"), u'/fakepath/2 - 2005')
+
     def test_call_numeric(self):
         self.failUnlessAlmostEqual(num_call("~#custom"), 0.3)
         self.failUnlessEqual(num_call("~#blah~foo", 0), 0)
@@ -151,10 +157,18 @@ class TAudioFile(TestCase):
         self.failUnlessEqual(bar_2_1.list_separate("~artist~~#track"),
                              ['Foo - 1', 'I have two artists - 1'])
 
+    def test_list_list_separate_types(self):
+        res = bar_2_1.list_separate("~~#track~artist~~filename")
+        self.assertEqual(res, [u'1 - Foo - does not/exist',
+                               u'1 - I have two artists - does not/exist'])
+
     def test_comma(self):
         for key in bar_1_1.realkeys():
             self.failUnlessEqual(bar_1_1.comma(key), bar_1_1(key))
         self.failUnless(", " in bar_2_1.comma("artist"))
+
+    def test_comma_filename(self):
+        self.assertTrue(isinstance(bar_1_1.comma("~filename"), unicode))
 
     def test_exist(self):
         self.failIf(bar_2_1.exists())
@@ -264,9 +278,9 @@ class TAudioFile(TestCase):
     def test_performers(self):
         q = AudioFile([("performer:vocals", "A"), ("performer:guitar", "B"),
                        ("performer", "C")])
-        self.failUnlessEqual(set(q.list("~performers")), set(["A", "B", "C"]))
+        self.failUnlessEqual(set(q.list("~performers")), {"A", "B", "C"})
         self.failUnlessEqual(set(q.list("~performers:roles")),
-                             set(["A (Vocals)", "B (Guitar)", "C"]))
+                             {"A (Vocals)", "B (Guitar)", "C"})
 
     def test_performers_multi_value(self):
         q = AudioFile([
@@ -276,17 +290,17 @@ class TAudioFile(TestCase):
         ])
 
         self.failUnlessEqual(
-            set(q.list("~performer")), set(["A", "B", "C", "F", "X", "Y"]))
+            set(q.list("~performer")), {"A", "B", "C", "F", "X", "Y"})
 
         self.failUnlessEqual(
-            set(q.list("~performer:roles")), set([
+            set(q.list("~performer:roles")), {
                     "A (Guitar, Vocals)",
                     "C",
                     "B (Guitar)",
                     "X (Vocals)",
                     "Y (Guitar, Vocals)",
                     "F",
-                ]))
+                })
 
     def test_people(self):
         q = AudioFile([("performer:vocals", "A"), ("performer:guitar", "B"),
@@ -370,6 +384,14 @@ class TAudioFile(TestCase):
         n.from_dump(dump)
         self.failUnless(set(dump.split("\n")) == set(n.to_dump().split("\n")))
 
+    def test_to_dump_unicode(self):
+        b = AudioFile(bar_1_1)
+        b[u"öäü"] = u"öäü"
+        dump = b.to_dump()
+        n = AudioFile()
+        n.from_dump(dump)
+        self.assertEqual(n[u"öäü"], u"öäü")
+
     def test_add(self):
         song = AudioFile()
         self.failIf("foo" in song)
@@ -390,11 +412,26 @@ class TAudioFile(TestCase):
         song.remove("foo", "one more")
         self.failIf("foo" in song)
 
+    def test_remove_unknown(self):
+        song = AudioFile()
+        song.add("foo", "bar")
+        song.remove("foo", "not in list")
+        song.remove("nope")
+        self.failUnlessEqual(song.list("foo"), ["bar"])
+
+    def test_remove_all(self):
+        song = AudioFile()
         song.add("foo", "bar")
         song.add("foo", "another")
         song.add("foo", "one more")
-        song.remove("foo", "not in list")
-        self.failIf("foo" in song)
+        song.remove("foo")
+        self.assertFalse("foo" in song)
+
+    def test_remove_empty(self):
+        song = AudioFile()
+        song.add("foo", u"")
+        song.remove("foo", u"")
+        self.assertFalse("foo" in song)
 
     def test_change(self):
         song = AudioFile()
@@ -530,6 +567,17 @@ class TAudioFile(TestCase):
 
     def tearDown(self):
         os.unlink(quux["~filename"])
+
+
+class Tdecode_value(TestCase):
+
+    def test_main(self):
+        self.assertEqual(decode_value("~#foo", 0.25), u"0.25")
+        self.assertEqual(decode_value("~#foo", 4), u"4")
+        self.assertEqual(decode_value("~#foo", "bar"), u"bar")
+        self.assertTrue(isinstance(decode_value("~#foo", "bar"), unicode))
+        path = fsnative(u"/foobar")
+        self.assertEqual(decode_value("~filename", path), fsdecode(path))
 
 
 class Treplay_gain(TestCase):

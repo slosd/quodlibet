@@ -18,7 +18,7 @@ The following distributions package Quod Libet:
 
 * Arch Linux: https://www.archlinux.org/packages/extra/any/quodlibet/
 * Debian: https://packages.debian.org/source/sid/quodlibet
-* Fedora: https://admin.fedoraproject.org/pkgdb/acls/name/quodlibet
+* Fedora: https://admin.fedoraproject.org/pkgdb/package/quodlibet/
 
 The Ubuntu PPA / unstable repo builds are automated by the following scripts:
 
@@ -158,13 +158,17 @@ Changes
 3.3 → 3.4
 ^^^^^^^^^
 
+* The main repo moved from Mercurial (Google Code) to Git (GitHub)
+* The build should now be reproducible
 * **gtk-update-icon-cache** is no longer a build dependency
-* **gettext >= 0.15** is required now
+* **gettext >= 0.15** is required now at build time
 * A complete **icon theme** is now required (this was also partly the case
   with 3.3) and an icon theme including symbolic icons is recommended.
   **adwaita-icon-theme** provides both for example.
-* **Mutagen 1.22** required
+* **Mutagen 1.22** required, **Mutagen 1.27** recommended
 * New files installed to ``/usr/share/icons/hicolor/scalable/apps/``
+* **quodlibet.desktop** now contains a **MimeType** entry, which means
+  calling **update-desktop-database** is needed after package installation.
 
 
 3.2 → 3.3

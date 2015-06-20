@@ -45,9 +45,9 @@ from quodlibet.util import copool, connect_destroy, connect_after_destroy
 from quodlibet.util.library import get_scan_dirs, set_scan_dirs
 from quodlibet.util.uri import URI
 from quodlibet.util import connect_obj
-from quodlibet.util.path import glib2fsnative
+from quodlibet.util.path import glib2fsnative, get_home_dir
 from quodlibet.util.library import background_filter, scan_library
-from quodlibet.qltk.window import PersistentWindowMixin, Window
+from quodlibet.qltk.window import PersistentWindowMixin, Window, on_first_map
 from quodlibet.qltk.songlistcolumns import SongListColumn
 
 
@@ -152,6 +152,13 @@ class TopBar(Gtk.Toolbar):
         self.insert(control_item, 0)
         t = PlayControls(player, library.librarian)
         self.volume = t.volume
+
+        # only restore the volume in case it is managed locally, otherwise
+        # this could affect the system volume
+        if not player.has_external_volume:
+            player.volume = config.getfloat("memory", "volume")
+
+        self.volume.connect("value-changed", self._on_volume_changed)
         control_item.add(t)
 
         self.insert(Gtk.SeparatorToolItem(), 1)
@@ -165,7 +172,7 @@ class TopBar(Gtk.Toolbar):
         qltk.add_css(self, "GtkToolbar {padding: 3px;}")
 
         # song text
-        info_pattern_path = os.path.join(const.USERDIR, "songinfo")
+        info_pattern_path = os.path.join(quodlibet.get_user_dir(), "songinfo")
         text = SongInfo(library.librarian, player, info_pattern_path)
         box.pack_start(Align(text, border=3), True, True, 0)
 
@@ -179,14 +186,21 @@ class TopBar(Gtk.Toolbar):
                 app.cover_manager, 'cover-changed',
                 self.__song_art_changed, library)
 
-        self.image.props.margin = 2
-        box.pack_start(self.image, False, True, 0)
+        box.pack_start(Align(self.image, border=2), False, True, 0)
+
+        # On older Gtk+ (3.4, at least)
+        # setting a margin on CoverImage leads to errors and result in the
+        # QL window not beeing visible for some reason.
+        assert self.image.props.margin == 0
 
         for child in self.get_children():
             child.show_all()
 
         context = self.get_style_context()
         context.add_class("primary-toolbar")
+
+    def _on_volume_changed(self, widget, value):
+        config.set("memory", "volume", str(value))
 
     def __new_song(self, player, song):
         self.image.set_song(song)
@@ -443,7 +457,7 @@ class QuodLibetWindow(Window, PersistentWindowMixin):
 
     def __init__(self, library, player, headless=False, restore_cb=None):
         super(QuodLibetWindow, self).__init__(dialog=False)
-        self.last_dir = const.HOME
+        self.last_dir = get_home_dir()
 
         self.__destroyed = False
         self.__update_title(player)
@@ -465,10 +479,13 @@ class QuodLibetWindow(Window, PersistentWindowMixin):
         accel_group.connect(keyval, mod, 0, scroll_and_jump)
 
         # dbus app menu
-        AppMenu(self, ui.get_action_groups()[0])
+        # Unity puts the app menu next to our menu bar. Since it only contains
+        # menu items also available in the menu bar itself, don't add it.
+        if not util.is_unity():
+            AppMenu(self, ui.get_action_groups()[0])
 
         # custom accel map
-        accel_fn = os.path.join(const.USERDIR, "accels")
+        accel_fn = os.path.join(quodlibet.get_user_dir(), "accels")
         Gtk.AccelMap.load(accel_fn)
         # save right away so we fill the file with example comments of all
         # accels
@@ -580,7 +597,7 @@ class QuodLibetWindow(Window, PersistentWindowMixin):
                 restore_browser)
         except:
             config.set("memory", "browser", browsers.name(0))
-            config.save(const.CONFIG)
+            config.save()
             raise
 
         self.showhide_playlist(ui.get_widget("/Menu/View/SongList"))
@@ -602,7 +619,7 @@ class QuodLibetWindow(Window, PersistentWindowMixin):
         self.connect('drag-data-received', self.__drag_data_received)
 
         if not headless:
-            GLib.idle_add(self.__configure_scan_dirs, library)
+            on_first_map(self, self.__configure_scan_dirs, library)
 
         print_d("Checking library startup configuration...")
         if config.getboolean('library', 'refresh_on_start'):
@@ -950,7 +967,7 @@ class QuodLibetWindow(Window, PersistentWindowMixin):
         container = self.browser.__container = self.browser.pack(self.songpane)
 
         player.replaygain_profiles[1] = self.browser.replaygain_profiles
-        player.volume = player.volume
+        player.reset_replaygain()
         self.__browserbox.add(container)
         container.show()
         self._filter_menu.set_browser(self.browser)
@@ -1121,7 +1138,7 @@ class QuodLibetWindow(Window, PersistentWindowMixin):
     def open_chooser(self, action):
         last_dir = self.last_dir
         if not os.path.exists(last_dir):
-            last_dir = const.HOME
+            last_dir = get_home_dir()
 
         class MusicFolderChooser(FolderChooser):
             def __init__(self, parent, init_dir):
@@ -1212,7 +1229,7 @@ class QuodLibetWindow(Window, PersistentWindowMixin):
             self.__first_browser_set = False
 
             song = library.librarian.get(config.get("memory", "song"))
-            seek_pos = config.getint("memory", "seek", 0)
+            seek_pos = config.getfloat("memory", "seek", 0)
             config.set("memory", "seek", 0)
             if song is not None:
                 player.setup(self.playlist, song, seek_pos)

@@ -8,7 +8,7 @@
 
 from gi.repository import Gtk
 
-from tests import TestCase, AbstractTestCase
+from tests import TestCase
 from helper import realized
 
 from quodlibet import browsers
@@ -59,7 +59,7 @@ class TBrowser(TestCase):
         self.browser = None
 
 
-class TBrowserBase(AbstractTestCase):
+class TBrowserBase(TestCase):
     Kind = None
 
     def setUp(self):
@@ -75,6 +75,9 @@ class TBrowserBase(AbstractTestCase):
         self.library.destroy()
         config.quit()
 
+
+class TBrowserMixin(object):
+
     def test_menu(self):
         # FIXME: the playlist browser accesses the song list directly
         if self.b.name == "Playlists":
@@ -86,6 +89,14 @@ class TBrowserBase(AbstractTestCase):
         to_pack = Gtk.Button()
         container = self.b.pack(to_pack)
         self.b.unpack(container, to_pack)
+
+    def test_pack_noshow_songpane(self):
+        to_pack = Gtk.Button()
+        to_pack.hide()
+        container = self.b.pack(to_pack)
+        self.assertFalse(to_pack.get_visible())
+        self.b.unpack(container, to_pack)
+        self.assertFalse(to_pack.get_visible())
 
     def test_name(self):
         self.failIf("_" in self.b.name)
@@ -127,6 +138,15 @@ class TBrowserBase(AbstractTestCase):
                 self.b.filter_text("foo")
                 self.b.filter_text("(((((##!!!!))),,,==")
 
+    def test_get_filter_text(self):
+        with realized(self.b):
+            if self.b.can_filter_text():
+                self.assertEqual(self.b.get_filter_text(), u"")
+                self.assertTrue(isinstance(self.b.get_filter_text(), unicode))
+                self.b.filter_text(u"foo")
+                self.assertEqual(self.b.get_filter_text(), u"foo")
+                self.assertTrue(isinstance(self.b.get_filter_text(), unicode))
+
     def test_filter_albums(self):
         with realized(self.b):
             if self.b.can_filter_albums():
@@ -144,6 +164,6 @@ browsers.init()
 for browser in browsers.browsers:
     cls = TBrowserBase
     name = "TB" + browser.__name__
-    new_test = type(name, (TBrowserBase,), {})
+    new_test = type(name, (TBrowserBase, TBrowserMixin), {})
     new_test.Kind = browser
     globals()[name] = new_test

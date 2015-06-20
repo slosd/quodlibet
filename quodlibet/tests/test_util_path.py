@@ -3,7 +3,8 @@ import os
 import unittest
 from tests import TestCase
 
-from quodlibet.util.path import pathname2url_win32, iscommand
+from quodlibet.util.path import pathname2url_win32, iscommand, limit_path, \
+    fsnative, is_fsnative, get_home_dir
 
 is_win = os.name == "nt"
 path_set = bool(os.environ.get('PATH', False))
@@ -21,6 +22,40 @@ class Tpathname2url(TestCase):
         p2u = pathname2url_win32
         for inp, should in cases.iteritems():
             self.failUnlessEqual(p2u(inp), should)
+
+
+class Tget_x_dir(TestCase):
+
+    def test_get_home_dir(self):
+        self.assertTrue(is_fsnative(get_home_dir()))
+        self.assertTrue(os.path.isabs(get_home_dir()))
+
+
+class Tlimit_path(TestCase):
+
+    def test_main(self):
+        if os.name == "nt":
+            path = u'C:\\foobar\\ä%s\\%s' % ("x" * 300, "x" * 300)
+            path = limit_path(path)
+            self.failUnlessEqual(len(path), 3 + 6 + 1 + 255 + 1 + 255)
+        else:
+            path = '/foobar/ä%s/%s' % ("x" * 300, "x" * 300)
+            path = limit_path(path)
+            self.failUnlessEqual(len(path), 1 + 6 + 1 + 255 + 1 + 255)
+
+        path = fsnative(u"foo%s.ext" % (u"x" * 300))
+        new = limit_path(path, ellipsis=False)
+        self.assertTrue(is_fsnative(new))
+        self.assertEqual(len(new), 255)
+        self.assertTrue(new.endswith(fsnative(u"xx.ext")))
+
+        new = limit_path(path)
+        self.assertTrue(is_fsnative(new))
+        self.assertEqual(len(new), 255)
+        self.assertTrue(new.endswith(fsnative(u"...ext")))
+
+        self.assertTrue(is_fsnative(limit_path(fsnative())))
+        self.assertEqual(limit_path(fsnative()), fsnative())
 
 
 class Tiscommand(TestCase):

@@ -16,18 +16,19 @@ import os
 
 from quodlibet.cli import process_arguments, exit_
 from quodlibet.util.dprint import print_d, print_
-from quodlibet.util import set_win32_unicode_argv
+from quodlibet import util
 
 
-def main():
+def main(argv):
     try:
         # we want basic commands not to import gtk (doubles process time)
         assert "gi.repository.Gtk" not in sys.modules
         sys.modules["gi.repository.Gtk"] = None
-        startup_actions, cmds_todo = process_arguments()
+        startup_actions, cmds_todo = process_arguments(argv)
     finally:
         sys.modules.pop("gi.repository.Gtk", None)
 
+    import traceback
     import quodlibet
     from quodlibet import app
     from quodlibet.qltk import add_signal_watch, icons
@@ -37,31 +38,34 @@ def main():
     import quodlibet.library
     from quodlibet import config
     from quodlibet import browsers
-    from quodlibet import const
     from quodlibet import util
+    from quodlibet.util.string import decode
 
-    config.init(const.CONFIG)
+    config.init(os.path.join(quodlibet.get_user_dir(), "config"))
 
     app.name = "Quod Libet"
     app.id = "quodlibet"
 
     quodlibet.init(icon=icons.QUODLIBET, name=app.name, proc_title=app.id)
 
-    print_d("Initializing main library (%s)" % (
-            quodlibet.util.path.unexpand(const.LIBRARY)))
+    library_path = os.path.join(quodlibet.get_user_dir(), "songs")
 
-    library = quodlibet.library.init(const.LIBRARY)
+    print_d("Initializing main library (%s)" % (
+            quodlibet.util.path.unexpand(library_path)))
+
+    library = quodlibet.library.init(library_path)
     app.library = library
 
-    from quodlibet.player import PlayerError
-    backend = os.environ.get(
-        "QUODLIBET_BACKEND", config.get("player", "backend"))
     # this assumes that nullbe will always succeed
-    for backend in [backend, "nullbe"]:
+    from quodlibet.player import PlayerError
+    wanted_backend = os.environ.get(
+        "QUODLIBET_BACKEND", config.get("player", "backend"))
+    backend_traceback = None
+    for backend in [wanted_backend, "nullbe"]:
         try:
-            player = quodlibet.init_backend(backend, app.librarian)
-        except PlayerError as error:
-            print_e("%s. %s" % (error.short_desc, error.long_desc))
+            player = quodlibet.player.init_player(backend, app.librarian)
+        except PlayerError:
+            backend_traceback = decode(traceback.format_exc())
         else:
             break
     app.player = player
@@ -135,6 +139,21 @@ def main():
         restore_cb=lambda:
             GLib.idle_add(exec_commands, priority=GLib.PRIORITY_HIGH))
 
+    from quodlibet.qltk.debugwindow import MinExceptionDialog
+    from quodlibet.qltk.window import on_first_map
+    if backend_traceback is not None:
+        def show_backend_error(window):
+            d = MinExceptionDialog(window,
+                _("Audio Backend Failed to Load"),
+                _("Loading the audio backend '%(name)s' failed. "
+                  "Audio playback will be disabled.") %
+                {"name": wanted_backend},
+                backend_traceback)
+            d.run()
+
+        # so we show the main window first
+        on_first_map(app.window, show_backend_error, app.window)
+
     from quodlibet.plugins.events import EventPluginHandler
     pm.register_handler(EventPluginHandler(library.librarian, player))
 
@@ -150,7 +169,8 @@ def main():
     mmkeys_handler = MMKeysHandler(app.name, window, player)
     if "QUODLIBET_NO_MMKEYS" not in os.environ:
         mmkeys_handler.start()
-    fsiface = FSInterface(player)
+    current_path = os.path.join(quodlibet.get_user_dir(), "current")
+    fsiface = FSInterface(current_path, player)
     remote = Remote(app, cmd_registry)
     try:
         remote.start()
@@ -193,11 +213,10 @@ def main():
     tracker.destroy()
     quodlibet.library.save()
 
-    config.save(const.CONFIG)
+    config.save()
 
     print_d("Finished shutdown.")
 
 
 if __name__ == "__main__":
-    set_win32_unicode_argv()
-    main()
+    main(util.argv)

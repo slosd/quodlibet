@@ -237,11 +237,11 @@ class Tag(Node):
                 else:
                     val = data.get("~" + name, "")
 
-            if self.res.search(val):
+            if self.res.search(unicode(val)):
                 return True
 
         for name in self.__intern:
-            if self.res.search(data(name)):
+            if self.res.search(unicode(data(name))):
                 return True
 
         for name in self.__fs:
@@ -340,7 +340,7 @@ def map_numeric_op(tag, op, value, time_=None):
 
     # get the biggest float/int
     max_val = ""
-    for i in xrange(len(value) + 1, 1, -1):
+    for i in xrange(len(value) + 1, 0, -1):
         part = value[:i]
         try:
             float(part)

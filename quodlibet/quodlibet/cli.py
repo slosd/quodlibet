@@ -62,7 +62,7 @@ def control(command, arg=None, ignore_error=False):
         exit_(notify_startup=True)
 
 
-def process_arguments():
+def process_arguments(argv):
     from quodlibet.util.uri import URI
     from quodlibet import util
     from quodlibet import const
@@ -104,6 +104,7 @@ def process_arguments():
         ("list-browsers", _("List available browsers")),
         ("print-playlist", _("Print the current playlist")),
         ("print-queue", _("Print the contents of the queue")),
+        ("print-query-text", _("Print the active text query")),
         ("no-plugins", _("Start without plugins")),
         ("run", _("Start Quod Libet if it isn't running")),
         ("quit", _("Exit Quod Libet")),
@@ -182,10 +183,10 @@ def process_arguments():
 
     # XXX: to make startup work in case the desktop file isn't passed
     # a file path/uri
-    if sys.argv[-1] == "--play-file":
-        sys.argv = sys.argv[:-1]
+    if argv[-1] == "--play-file":
+        argv = argv[:-1]
 
-    opts, args = options.parse()
+    opts, args = options.parse(argv[1:])
 
     for command, arg in opts.items():
         if command in controls:
@@ -230,6 +231,8 @@ def process_arguments():
                 queue("print-playing")
         elif command == "print-query":
             queue(command, arg)
+        elif command == "print-query-text":
+            queue(command)
         elif command == "start-playing":
             actions.append(command)
         elif command == "no-plugins":

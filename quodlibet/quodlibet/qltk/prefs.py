@@ -12,7 +12,6 @@
 from gi.repository import Gtk
 
 from quodlibet import config
-from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
 from quodlibet import app
@@ -382,13 +381,13 @@ class PreferencesWindow(UniqueWindow):
 
         def __toggled_gain(self, activator, widgets):
             if app.player: # tests
-                app.player.volume = app.player.volume
+                app.player.reset_replaygain()
             for widget in widgets:
                 widget.set_sensitive(activator.get_active())
 
         def __changed(self, adj, section, name):
             config.set(section, name, str(adj.get_value()))
-            app.player.volume = app.player.volume
+            app.player.reset_replaygain()
 
     class Tagging(Gtk.VBox):
         name = "tagging"
@@ -695,6 +694,6 @@ class PreferencesWindow(UniqueWindow):
                 notebook.set_current_page(p)
 
     def __destroy(self):
-        config.write(const.CONFIG)
+        config.save()
         if self.current_scan_dirs != get_scan_dirs():
             scan_library(app.library, force=False)

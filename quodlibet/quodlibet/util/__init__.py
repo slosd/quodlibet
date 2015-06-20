@@ -32,6 +32,13 @@ from quodlibet.util.string.titlecase import title
 
 from quodlibet.const import SUPPORT_EMAIL, COPYRIGHT
 from quodlibet.util.dprint import print_d, print_
+from .misc import environ, argv, cached_func, get_locale_encoding, \
+    get_fs_encoding
+from .environment import *
+
+
+# pyflakes
+environ, argv, cached_func, get_locale_encoding, get_fs_encoding
 
 
 class InstanceTracker(object):
@@ -435,7 +442,7 @@ def website(site):
 
     # sensible-browser is a debian thing
     blocking_progs = ["sensible-browser"]
-    blocking_progs.extend(os.environ.get("BROWSER", "").split(":"))
+    blocking_progs.extend(environ.get("BROWSER", "").split(":"))
 
     for prog in blocking_progs:
         if not iscommand(prog):
@@ -1162,31 +1169,11 @@ def list_unique(sequence):
     return l
 
 
-def set_win32_unicode_argv():
-    if os.name != "nt":
-        return
+def reraise(tp, value, tb=None):
+    """Reraise an exception with a new exception type and
+    the original stack trace
+    """
 
-    import ctypes
-    from ctypes import cdll, windll, wintypes
-
-    GetCommandLineW = cdll.kernel32.GetCommandLineW
-    GetCommandLineW.argtypes = []
-    GetCommandLineW.restype = wintypes.LPCWSTR
-
-    CommandLineToArgvW = windll.shell32.CommandLineToArgvW
-    CommandLineToArgvW.argtypes = [
-        wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
-    CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
-
-    LocalFree = windll.kernel32.LocalFree
-    LocalFree.argtypes = [wintypes.HLOCAL]
-    LocalFree.restype = wintypes.HLOCAL
-
-    argc = ctypes.c_int()
-    argv = CommandLineToArgvW(GetCommandLineW(), ctypes.byref(argc))
-    if not argv:
-        return
-
-    sys.argv = argv[max(0, argc.value - len(sys.argv)):argc.value]
-
-    LocalFree(argv)
+    if tb is None:
+        tb = sys.exc_info()[2]
+    raise tp, value, tb

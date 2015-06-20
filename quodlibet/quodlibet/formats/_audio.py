@@ -16,12 +16,11 @@ import time
 
 from ._image import ImageContainer
 
-from quodlibet import const
 from quodlibet import util
 from quodlibet import config
 from quodlibet.util.path import mkdir, fsdecode, mtime, expanduser, is_fsnative
 from quodlibet.util.path import normalize_path, fsnative, escape_filename
-from quodlibet.util.string import encode
+from quodlibet.util.string import encode, decode, isascii
 
 from quodlibet.util.uri import URI
 from quodlibet.util import human_sort_key as human, capitalize
@@ -29,20 +28,19 @@ from quodlibet.util import human_sort_key as human, capitalize
 from quodlibet.util.tags import TAG_ROLES, TAG_TO_SORT
 
 
-MIGRATE = set(["~#playcount", "~#laststarted", "~#lastplayed", "~#added",
-               "~#skipcount", "~#rating", "~bookmark"])
+MIGRATE = {"~#playcount", "~#laststarted", "~#lastplayed", "~#added",
+           "~#skipcount", "~#rating", "~bookmark"}
 """These get migrated if a song gets reloaded"""
 
 PEOPLE = ["artist", "albumartist", "author", "composer", "~performers",
           "originalartist", "lyricist", "arranger", "conductor"]
 """Sources of the ~people tag, most important first"""
 
-INTERN_NUM_DEFAULT = set(
-    ["~#lastplayed", "~#laststarted", "~#playcount",
-     "~#skipcount", "~#length", "~#bitrate", "~#filesize"])
+INTERN_NUM_DEFAULT = {"~#lastplayed", "~#laststarted", "~#playcount",
+                      "~#skipcount", "~#length", "~#bitrate", "~#filesize"}
 """Default to 0"""
 
-FILESYSTEM_TAGS = set(["~filename", "~basename", "~dirname"])
+FILESYSTEM_TAGS = {"~filename", "~basename", "~dirname"}
 """Values are bytes in Linux instead of unicode"""
 
 SORT_TO_TAG = dict([(v, k) for (k, v) in TAG_TO_SORT.iteritems()])
@@ -55,13 +53,37 @@ VARIOUS_ARTISTS_VALUES = 'V.A.', 'various artists', 'Various Artists'
 """Values for ~people representing lots of people, most important last"""
 
 
+def decode_value(tag, value):
+    """Returns a unicode representation of the passed value, based on
+    the type and the tag it originated from.
+
+    Not reversible.
+    """
+
+    if isinstance(value, unicode):
+        return value
+    elif isinstance(value, float):
+        return u"%.2f" % value
+    elif tag in FILESYSTEM_TAGS:
+        return fsdecode(value)
+    return unicode(value)
+
+
 class AudioFile(dict, ImageContainer):
     """An audio file. It looks like a dict, but implements synthetic
     and tied tags via __call__ rather than __getitem__. This means
     __getitem__, get, and so on can be used for efficiency.
 
     If you need to sort many AudioFiles, you can use their sort_key
-    attribute as a decoration."""
+    attribute as a decoration.
+
+    Keys are either ASCII str or unicode.
+    Values are always unicode except if the tag is part of FILESYSTEM_TAGS,
+    then the value is of the path type (str on UNIX, unicode on Windows)
+
+    Some methods will make sure the returned values are always unicode, see
+    their description.
+    """
 
     # New tags received from the backend will update the song
     fill_metadata = False
@@ -213,19 +235,22 @@ class AudioFile(dict, ImageContainer):
 
         If a tied tag ('a~b') is requested, the 'connector' keyword
         argument may be used to specify what it is tied with.
+        In case the tied tag contains numeric and file path tags, the result
+        will still be a unicode string.
 
-        For details on tied tags, see the documentation for util.tagsplit."""
+        For details on tied tags, see the documentation for util.tagsplit.
+        """
+
         if key[:1] == "~":
             key = key[1:]
             if "~" in key:
-                # FIXME: decode ~filename etc.
-                if not isinstance(default, basestring):
-                    return default
-                return connector.join(
-                    filter(None,
-                    map(lambda x: isinstance(x, basestring) and x or str(x),
-                    map(lambda x: (isinstance(x, float) and "%.2f" % x) or x,
-                    map(self.__call__, util.tagsplit("~" + key)))))) or default
+                real_key = "~" + key
+                values = []
+                for v in map(self.__call__, util.tagsplit(real_key)):
+                    v = decode_value(real_key, v)
+                    if v:
+                        values.append(v)
+                return connector.join(values) or default
             elif key == "#track":
                 try:
                     return int(self["tracknumber"].split("/")[0])
@@ -365,8 +390,8 @@ class AudioFile(dict, ImageContainer):
             title = dict.get(self, "title")
             if title is None:
                 basename = self("~basename")
-                basename = basename.decode(const.FSCODING, "replace")
-                return "%s [%s]" % (basename, _("Unknown"))
+                return "%s [%s]" % (
+                    decode_value("~basename", basename), _("Unknown"))
             else:
                 return title
         elif key in SORT_TO_TAG:
@@ -429,13 +454,19 @@ class AudioFile(dict, ImageContainer):
 
     def comma(self, key):
         """Get all values of a tag, separated by commas. Synthetic
-        tags are supported, but will be slower. If the value is
-        numeric, that is returned rather than a list."""
+        tags are supported, but will be slower. All list items
+        will be unicode.
+
+        If the value is numeric, that is returned rather than a list.
+        """
 
         if "~" in key or key == "title":
             v = self(key, u"")
+            if key in FILESYSTEM_TAGS:
+                v = fsdecode(v)
         else:
             v = self.get(key, u"")
+
         if isinstance(v, (int, long, float)):
             return v
         else:
@@ -445,8 +476,12 @@ class AudioFile(dict, ImageContainer):
         """Get all values of a tag, as a list. Synthetic tags are supported,
         but will be slower. Numeric tags are not supported.
 
+        For file path keys the returned list might contain path items
+        (non-unicode).
+
         An empty synthetic tag cannot be distinguished from a non-existent
-        synthetic tag; both result in []."""
+        synthetic tag; both result in [].
+        """
 
         if "~" in key or key == "title":
             v = self(key, connector="\n")
@@ -460,14 +495,18 @@ class AudioFile(dict, ImageContainer):
 
     def list_separate(self, key, connector=" - "):
         """Similar to list, but will return a list of all combinations
-        for tied tags instead of one comma separated string"""
+        for tied tags instead of one comma separated string.
+
+        In case of tied tags the result will be unicode, otherwise
+        it returns the same as list()
+        """
+
         if key[:1] == "~" and "~" in key[1:]:
-            vals = \
-                filter(None,
-                map(lambda x: isinstance(x, basestring) and x or str(x),
-                map(lambda x: (isinstance(x, float) and "%.2f" % x) or x,
-                (self(tag) for tag in util.tagsplit(key)))))
-            vals = (val.split("\n") for val in vals)
+            vals = []
+            for v in map(self.__call__, util.tagsplit(key)):
+                v = decode_value(key, v)
+                if v:
+                    vals.append(v.split("\n"))
             r = [[]]
             for x in vals:
                 r = [i + [y] for y in x for i in r]
@@ -478,6 +517,8 @@ class AudioFile(dict, ImageContainer):
     def list_unique(self, keys):
         """Returns a combined value of all values in keys; duplicate values
         will be ignored.
+
+        Returns the same as list().
         """
 
         l = []
@@ -545,12 +586,7 @@ class AudioFile(dict, ImageContainer):
         if k is None:
             return True
 
-        try:
-            if isinstance(k, unicode):
-                k = k.encode("ascii")
-            else:
-                k.decode("ascii")
-        except UnicodeError:
+        if not isascii(k):
             return False
 
         if not k or "=" in k or "~" in k:
@@ -663,21 +699,27 @@ class AudioFile(dict, ImageContainer):
 
     def to_dump(self):
         """A string of 'key=value' lines, similar to vorbiscomment output."""
+
+        def encode_key(k):
+            return encode(k) if isinstance(k, unicode) else k
+
         s = []
         for k in self.keys():
-            k = str(k)
+            enc_key = encode_key(k)
+
             if isinstance(self[k], int) or isinstance(self[k], long):
-                s.append("%s=%d" % (k, self[k]))
+                s.append("%s=%d" % (enc_key, self[k]))
             elif isinstance(self[k], float):
-                s.append("%s=%f" % (k, self[k]))
+                s.append("%s=%f" % (enc_key, self[k]))
             else:
                 for v2 in self.list(k):
                     if isinstance(v2, str):
-                        s.append("%s=%s" % (k, v2))
+                        s.append("%s=%s" % (enc_key, v2))
                     else:
-                        s.append("%s=%s" % (k, encode(v2)))
+                        s.append("%s=%s" % (enc_key, encode(v2)))
         for k in (INTERN_NUM_DEFAULT - set(self.keys())):
-            s.append("%s=%d" % (k, self.get(k, 0)))
+            enc_key = encode_key(k)
+            s.append("%s=%d" % (enc_key, self.get(k, 0)))
         if "~#rating" not in self:
             s.append("~#rating=%f" % self("~#rating"))
         s.append("~format=%s" % self.format)
@@ -686,6 +728,15 @@ class AudioFile(dict, ImageContainer):
 
     def from_dump(self, text):
         """Parses the text created with to_dump and adds the found tags."""
+
+        def decode_key(key):
+            """str if ascii, otherwise decode using utf-8"""
+            try:
+                key.decode("ascii")
+            except ValueError:
+                return decode(key)
+            return key
+
         for line in text.split("\n"):
             if not line:
                 continue
@@ -703,7 +754,7 @@ class AudioFile(dict, ImageContainer):
                     except ValueError:
                         pass
             else:
-                self.add(key, val)
+                self.add(decode_key(key), decode(val))
 
     def change(self, key, old_value, new_value):
         """Change 'old_value' to 'new_value' for the given metadata key.
@@ -726,21 +777,24 @@ class AudioFile(dict, ImageContainer):
         else:
             self[key] += "\n" + value
 
-    def remove(self, key, value):
-        """Remove a value from the given key; if the value is not found,
-        remove all values for that key."""
+    def remove(self, key, value=None):
+        """Remove a value from the given key.
+
+        If value is None remove all values for that key, if it exists.
+        If the key or value is not found do nothing.
+        """
+
         if key not in self:
             return
-        elif self[key] == value:
-            del(self[key])
+        elif value is None or self[key] == value:
+            del self[key]
         else:
             try:
                 parts = self.list(key)
                 parts.remove(value)
-                self[key] = "\n".join(parts)
+                self[key] = u"\n".join(parts)
             except ValueError:
-                if key in self:
-                    del(self[key])
+                pass
 
     def replay_gain(self, profiles, pre_amp_gain=0, fallback_gain=0):
         """Return the computed Replay Gain scale factor.

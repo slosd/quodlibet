@@ -9,7 +9,6 @@ import time
 
 from gi.repository import Gtk, Pango
 
-from quodlibet import const
 from quodlibet import qltk
 from quodlibet import util
 from quodlibet import app
@@ -218,7 +217,8 @@ class OneSong(qltk.Notebook):
                 return _("Unknown")
             else:
                 timestr = time.strftime("%c", time.localtime(t))
-                return timestr.decode(const.ENCODING)
+                encoding = util.get_locale_encoding()
+                return timestr.decode(encoding)
 
         playcount = counter(song.get("~#playcount", 0))
         skipcount = counter(song.get("~#skipcount", 0))
@@ -255,7 +255,8 @@ class OneSong(qltk.Notebook):
                 return _("Unknown")
             else:
                 timestr = time.strftime("%c", time.localtime(t))
-                return timestr.decode(const.ENCODING)
+                encoding = util.get_locale_encoding()
+                return timestr.decode(encoding)
 
         fn = fsdecode(unexpand(song["~filename"]))
         length = util.format_time_long(song.get("~#length", 0))
@@ -377,8 +378,8 @@ class OneAlbum(qltk.Notebook):
         box.pack_start(hb, False, False, 0)
 
     def _people(self, songs, box):
-        artists = set([])
-        performers = set([])
+        artists = set()
+        performers = set()
         for song in songs:
             artists.update(song.list("artist"))
             performers.update(song.list("performer"))
@@ -527,7 +528,7 @@ class ManySongs(qltk.Notebook):
         box.pack_start(l, False, False, 0)
 
     def _people(self, songs, box):
-        artists = set([])
+        artists = set()
         none = 0
         for song in songs:
             if "artist" in song:
@@ -546,7 +547,7 @@ class ManySongs(qltk.Notebook):
                         False, False, 0)
 
     def _album(self, songs, box):
-        albums = set([])
+        albums = set()
         none = 0
         for song in songs:
             if "album" in song:

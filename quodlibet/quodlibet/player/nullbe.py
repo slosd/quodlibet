@@ -10,8 +10,6 @@ from quodlibet.player import PlayerError
 
 
 class NullPlayer(BasePlayer):
-    __gproperties__ = BasePlayer._gproperties_
-    __gsignals__ = BasePlayer._gsignals_
     version_info = "Null Player Backend"
     name = "Null"
 
@@ -19,6 +17,7 @@ class NullPlayer(BasePlayer):
         super(NullPlayer, self).__init__()
         self._paused = True
         self._source = None
+        self._volume = 1.0
         self._position = 0
 
     def _destroy(self):
@@ -39,6 +38,12 @@ class NullPlayer(BasePlayer):
             return
         self._paused = paused
         self.emit((paused and 'paused') or 'unpaused')
+
+    def do_get_property(self, property):
+        if property.name == 'volume':
+            return self._volume
+        else:
+            raise AttributeError
 
     def do_set_property(self, property, v):
         if property.name == 'volume':
@@ -79,7 +84,7 @@ class NullPlayer(BasePlayer):
         self._position = 0
 
     def can_play_uri(self, uri):
-        return False
+        return True
 
 
 def init(librarian):

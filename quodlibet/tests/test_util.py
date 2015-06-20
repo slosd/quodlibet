@@ -12,11 +12,11 @@ import tempfile
 import os
 import sys
 import threading
+import traceback
 import time
 from quodlibet import util
 from quodlibet import config
 from quodlibet.util import format_time_long as f_t_l
-from quodlibet.util.compat import text_type
 
 
 is_win = os.name == "nt"
@@ -1053,13 +1053,26 @@ class Tlist_unique(TestCase):
         self.assertEqual(util.list_unique([1, 1, 1, 2]), [1, 2])
 
 
-class Tset_win32_unicode_argv(TestCase):
+class Treraise(TestCase):
+
+    def test_reraise(self):
+        try:
+            try:
+                raise ValueError("foo")
+            except Exception as e:
+                util.reraise(TypeError, e)
+        except Exception as e:
+            self.assertTrue(isinstance(e, TypeError))
+            self.assertTrue("ValueError" in traceback.format_exc())
+        else:
+            self.assertTrue(False)
+
+
+class Tenviron(TestCase):
 
     def test_main(self):
-        old_argv = sys.argv
-        try:
-            util.set_win32_unicode_argv()
+        for v in util.environ.values():
             if os.name == "nt":
-                self.assertTrue(isinstance(sys.argv[0], text_type))
-        finally:
-            sys.argv = old_argv
+                self.assertTrue(isinstance(v, unicode))
+            else:
+                self.assertTrue(isinstance(v, str))

@@ -73,9 +73,7 @@ class CollectionView(AllTreeView):
         return albums
 
 
-class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
-    __gsignals__ = Browser.__gsignals__
-
+class CollectionBrowser(Browser, util.InstanceTracker):
     name = _("Album Collection")
     accelerated_name = _("Album _Collection")
     priority = 5
@@ -138,6 +136,8 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
 
     def __init__(self, library):
         super(CollectionBrowser, self).__init__(spacing=6)
+        self.set_orientation(Gtk.Orientation.VERTICAL)
+
         self._register_instance()
         if self.__model is None:
             self._init_model(library)
@@ -359,6 +359,9 @@ class CollectionBrowser(Browser, Gtk.VBox, util.InstanceTracker):
         if Query.is_parsable(text):
             self.__update_filter(self.__search, text)
             self.activate()
+
+    def get_filter_text(self):
+        return self.__search.get_text()
 
     def unfilter(self):
         pass

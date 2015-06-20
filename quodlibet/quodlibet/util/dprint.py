@@ -12,19 +12,13 @@ import os
 import quodlibet.const
 import quodlibet.util.logging
 
-from quodlibet.const import ENCODING
 from quodlibet.util.clicolor import Colorise
 from quodlibet.util import clicolor
+from .misc import get_locale_encoding
+from .environment import is_py2exe, is_py2exe_console
 
 
-def _is_py2exe():
-    return os.name == 'nt' and hasattr(sys, "frozen")
-
-
-def _is_py2exe_console():
-    """If True, stdout/stderr can be used"""
-
-    return sys.frozen == "console_exe"
+_ENCODING = get_locale_encoding()
 
 
 def _format_print(string, prefix=""):
@@ -80,7 +74,7 @@ def extract_caller_info():
 
 
 def _print(string, output, frm="utf-8", strip_color=True, end=os.linesep):
-    if _is_py2exe() and not _is_py2exe_console():
+    if is_py2exe() and not is_py2exe_console():
         return
 
     can_have_color = True
@@ -89,9 +83,9 @@ def _print(string, output, frm="utf-8", strip_color=True, end=os.linesep):
         can_have_color = False
 
     if isinstance(string, unicode):
-        string = string.encode(ENCODING, "replace")
+        string = string.encode(_ENCODING, "replace")
     else:
-        string = string.decode(frm).encode(ENCODING, "replace")
+        string = string.decode(frm).encode(_ENCODING, "replace")
 
     try:
         if can_have_color:

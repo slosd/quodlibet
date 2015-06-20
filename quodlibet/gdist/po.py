@@ -19,7 +19,6 @@ from tempfile import mkstemp
 import shutil
 
 from distutils.dep_util import newer
-from distutils.util import change_root
 from distutils.spawn import find_executable
 from distutils.core import Command
 
@@ -32,7 +31,8 @@ class po_stats(Command):
     user_options = []
 
     def initialize_options(self):
-        pass
+        self.po_directory = None
+        self.po_files = None
 
     def finalize_options(self):
         self.po_directory = self.distribution.po_directory
@@ -207,16 +207,14 @@ class install_mo(Command):
     def initialize_options(self):
         self.skip_build = None
         self.build_base = None
-        self.install_base = None
-        self.root = None
+        self.install_dir = None
         self.outfiles = []
 
     def finalize_options(self):
         self.set_undefined_options('build', ('build_base', 'build_base'))
         self.set_undefined_options(
             'install',
-            ('root', 'root'),
-            ('install_base', 'install_base'),
+            ('install_data', 'install_dir'),
             ('skip_build', 'skip_build'))
 
     def get_outputs(self):
@@ -226,9 +224,7 @@ class install_mo(Command):
         if not self.skip_build:
             self.run_command('build_mo')
         src = os.path.join(self.build_base, "share", "locale")
-        dest = os.path.join(self.install_base, "share", "locale")
-        if self.root is not None:
-            dest = change_root(self.root, dest)
+        dest = os.path.join(self.install_dir, "share", "locale")
         out = self.copy_tree(src, dest)
         self.outfiles.extend(out)
 

@@ -10,6 +10,7 @@
 from gi.repository import GObject
 
 from quodlibet.formats._audio import AudioFile
+from quodlibet import config
 
 
 class Equalizer(object):
@@ -69,11 +70,10 @@ class BasePlayer(GObject.GObject, Equalizer):
     # Replay Gain profiles are a list of values to be tried in order;
     # Four things can set them: rg menu, browser, play order, and a default.
     replaygain_profiles = [None, None, None, ["none"]]
-    _volume = 1.0
     _paused = True
     _source = None
 
-    _gsignals_ = {
+    __gsignals__ = {
         'song-started':
         (GObject.SignalFlags.RUN_LAST, None, (object,)),
         'song-ended':
@@ -86,7 +86,7 @@ class BasePlayer(GObject.GObject, Equalizer):
         'error': (GObject.SignalFlags.RUN_LAST, None, (object, object)),
     }
 
-    _gproperties_ = {
+    __gproperties__ = {
         'volume': (float, 'player volume', 'the volume of the player',
                    0.0, 1.0, 1.0,
                    GObject.ParamFlags.READABLE | GObject.ParamFlags.WRITABLE)
@@ -105,15 +105,49 @@ class BasePlayer(GObject.GObject, Equalizer):
 
         self._destroy()
 
-    def do_get_property(self, property):
-        if property.name == 'volume':
-            return self._volume
+    def calc_replaygain_volume(self, volume):
+        """Returns a new float volume for the given volume.
+
+        Takes into account the global active replaygain profile list,
+        the user specified replaygain settings and the tags available
+        for that song.
+
+        Args:
+            volume (float): 0.0..1.0
+        Returns:
+            float: adjusted volume, can be outside of 0.0..0.1
+        """
+
+        if self.song and config.getboolean("player", "replaygain"):
+            profiles = filter(None, self.replaygain_profiles)[0]
+            fb_gain = config.getfloat("player", "fallback_gain")
+            pa_gain = config.getfloat("player", "pre_amp_gain")
+            scale = self.song.replay_gain(profiles, pa_gain, fb_gain)
         else:
-            raise AttributeError
+            scale = 1
+        return volume * scale
+
+    def _reset_replaygain(self):
+        self.volume = self.volume
+
+    def reset_replaygain(self):
+        """Call in case something affecting the replaygain adjustment has
+        changed to change the output volume
+        """
+
+        self._reset_replaygain()
+
+    @property
+    def has_external_volume(self):
+        """If setting the volume will affect anything outside of QL and
+        if the volume can change without any event in QL.
+        """
+
+        return False
 
     @property
     def volume(self):
-        return self._volume
+        return self.props.volume
 
     @volume.setter
     def volume(self, v):

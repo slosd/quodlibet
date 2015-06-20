@@ -13,7 +13,6 @@ AppData Specification: http://people.freedesktop.org/~hughsient/appdata/
 import os
 
 from distutils.dep_util import newer
-from distutils.util import change_root
 from distutils.core import Command
 
 
@@ -26,10 +25,11 @@ class build_appdata(Command):
 
     description = "build .appdata.xml files"
     user_options = []
-    build_base = None
 
     def initialize_options(self):
-        pass
+        self.build_base = None
+        self.po_directory = None
+        self.appdata = None
 
     def finalize_options(self):
         self.appdata = self.distribution.appdata
@@ -60,21 +60,18 @@ class install_appdata(Command):
     description = "install .appdata.xml files"
     user_options = []
 
-    prefix = None
-    skip_build = None
-    appdata = None
-    build_base = None
-    root = None
-
     def initialize_options(self):
+        self.install_dir = None
+        self.skip_build = None
+        self.appdata = None
+        self.build_base = None
         self.outfiles = []
 
     def finalize_options(self):
         self.set_undefined_options('build', ('build_base', 'build_base'))
         self.set_undefined_options(
             'install',
-            ('root', 'root'),
-            ('install_base', 'prefix'),
+            ('install_data', 'install_dir'),
             ('skip_build', 'skip_build'))
 
         self.set_undefined_options(
@@ -87,10 +84,7 @@ class install_appdata(Command):
         if not self.skip_build:
             self.run_command('build_appdata')
 
-        basepath = os.path.join(self.prefix, 'share', 'appdata')
-        if self.root is not None:
-            basepath = change_root(self.root, basepath)
-
+        basepath = os.path.join(self.install_dir, 'share', 'appdata')
         srcpath = os.path.join(self.build_base, 'share', 'appdata')
         out = self.mkpath(basepath)
         self.outfiles.extend(out or [])

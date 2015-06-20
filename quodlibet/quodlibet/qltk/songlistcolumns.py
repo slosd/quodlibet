@@ -15,10 +15,9 @@ from gi.repository import Gtk, Pango, GLib
 
 from quodlibet import util
 from quodlibet import config
-from quodlibet import const
 from quodlibet.pattern import Pattern
 from quodlibet.qltk.views import TreeViewColumnButton
-from quodlibet.util.path import fsdecode, unexpand
+from quodlibet.util.path import fsdecode, unexpand, fsnative
 from quodlibet.formats._audio import FILESYSTEM_TAGS
 
 
@@ -175,7 +174,8 @@ class DateColumn(WideTextColumn):
             else:
                 format_ = "%x"
             stamp = time.localtime(stamp)
-            text = time.strftime(format_, stamp).decode(const.ENCODING)
+            encoding = util.get_locale_encoding()
+            text = time.strftime(format_, stamp).decode(encoding)
             cell.set_property('text', text)
 
 
@@ -201,10 +201,11 @@ class FSColumn(WideTextColumn):
         self._render.set_property('ellipsize', Pango.EllipsizeMode.MIDDLE)
 
     def _cdf(self, column, cell, model, iter_, user_data):
-        value = model.get_value(iter_).comma(self.header_name)
+        values = model.get_value(iter_).list(self.header_name)
+        value = values[0] if values else fsnative(u"")
         if not self._needs_update(value):
             return
-        cell.set_property('text', unexpand(fsdecode(value)))
+        cell.set_property('text', fsdecode(unexpand(value)))
 
 
 class PatternColumn(WideTextColumn):

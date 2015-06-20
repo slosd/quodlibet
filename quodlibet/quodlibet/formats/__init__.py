@@ -62,7 +62,7 @@ def init():
 
     # This can be used for the quodlibet.desktop file
     desktop_mime_types = "MimeType=" + \
-        ";".join(sorted(set([m.split(";")[0] for m in mimes]))) + ";"
+        ";".join(sorted({m.split(";")[0] for m in mimes})) + ";"
     print_d(desktop_mime_types)
 
     if not _infos:
@@ -99,9 +99,10 @@ def filter(filename):
 
 
 from quodlibet.formats._audio import PEOPLE
-from quodlibet.formats._audio import DUMMY_SONG
+from quodlibet.formats._audio import DUMMY_SONG, decode_value
 from quodlibet.formats._image import EmbeddedImage
 
 EmbeddedImage
 DUMMY_SONG
 PEOPLE
+decode_value

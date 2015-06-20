@@ -32,7 +32,6 @@ from quodlibet.util import connect_obj
 
 
 class FileSystem(Browser, Gtk.HBox):
-    __gsignals__ = Browser.__gsignals__
 
     __library = None
 
@@ -119,7 +118,7 @@ class FileSystem(Browser, Gtk.HBox):
             qltk.selection_set_songs(sel, songs)
         else:
             # External target (app) is delivered a list of URIS of songs
-            uris = list(set([URI.frompath(dir) for dir in dirs]))
+            uris = list({URI.frompath(dir) for dir in dirs})
             print_d("Directories to drop: %s" % [u.filename for u in uris])
             sel.set_uris(uris)
 

@@ -35,7 +35,7 @@ class TPlayer(AbstractTestCase):
     def setUp(self):
         config.init()
         config.set("player", "gst_pipeline", "fakesink")
-        module = player.init(self.NAME)
+        module = player.init_backend(self.NAME)
         lib = library.init()
         self.player = module.init(lib.librarian)
         source = PlaylistModel()
@@ -160,6 +160,17 @@ class TPlayer(AbstractTestCase):
         self.player.go_to(None)
         self.assertTrue(self.signals, ["unpaused", "paused"])
 
+    def test_replaygain(self):
+        self.player.replaygain_profiles[0] = "track"
+        self.player.next()
+        config.set("player", "replaygain", True)
+        self.assertEqual(self.player.calc_replaygain_volume(1.0), 1.0)
+        config.set("player", "fallback_gain", -5.0)
+        self.assertAlmostEqual(
+            self.player.calc_replaygain_volume(1.0), 0.562, 3)
+        config.set("player", "pre_amp_gain", 10.0)
+        self.assertEqual(self.player.calc_replaygain_volume(1.0), 1.0)
+
 
 class TNullPlayer(TPlayer):
     NAME = "nullbe"
@@ -201,15 +212,15 @@ class TNullPlayer(TPlayer):
         self.player.stop()
         self.assertEqual(self.player.get_position(), 0)
 
-    def test_can_play_uri_xine(self):
-        self.assertFalse(self.player.can_play_uri(""))
-        self.assertFalse(self.player.can_play_uri("file://"))
-        self.assertFalse(self.player.can_play_uri("fake://"))
+    def test_can_play_uri_null(self):
+        self.assertTrue(self.player.can_play_uri(""))
+        self.assertTrue(self.player.can_play_uri("file://"))
+        self.assertTrue(self.player.can_play_uri("fake://"))
 
 
 has_xine = True
 try:
-    player.init("xinebe")
+    player.init_backend("xinebe")
 except player.PlayerError:
     has_xine = False
 
@@ -226,7 +237,7 @@ class TXinePlayer(TPlayer):
 
 has_gstbe = True
 try:
-    player.init("gstbe")
+    player.init_backend("gstbe")
 except player.PlayerError:
     has_gstbe = False
 
@@ -243,24 +254,23 @@ class TGstPlayer(TPlayer):
 
 class TVolume(TestCase):
     def setUp(self):
-        config.init()
         self.p = NullPlayer()
         self.v = Volume(self.p)
 
     def test_setget(self):
         for i in [0.0, 1.2, 0.24, 1.0, 0.9]:
             self.v.set_value(i)
-            self.failUnlessAlmostEqual(self.p.volume, self.v.get_value())
+            self.failUnlessAlmostEqual(self.p.volume, self.v.get_value() ** 3)
 
     def test_add(self):
         self.v.set_value(0.5)
         self.v += 0.1
-        self.failUnlessAlmostEqual(self.p.volume, 0.6)
+        self.failUnlessAlmostEqual(self.p.volume, 0.6 ** 3)
 
     def test_sub(self):
         self.v.set_value(0.5)
         self.v -= 0.1
-        self.failUnlessAlmostEqual(self.p.volume, 0.4)
+        self.failUnlessAlmostEqual(self.p.volume, 0.4 ** 3)
 
     def test_add_boundry(self):
         self.v.set_value(0.95)
@@ -275,4 +285,3 @@ class TVolume(TestCase):
     def tearDown(self):
         self.p.destroy()
         self.v.destroy()
-        config.quit()

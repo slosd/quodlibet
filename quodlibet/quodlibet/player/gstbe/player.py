@@ -145,42 +145,43 @@ class BufferingWrapper(object):
 
 
 class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
-    __gproperties__ = BasePlayer._gproperties_
-    __gsignals__ = BasePlayer._gsignals_
-
-    _paused = True
-    _in_gapless_transition = False
-    _last_position = 0
-
-    bin = None
-    _vol_element = None
-    _use_eq = False
-    _eq_element = None
-
-    __atf_id = None
-    __bus_id = None
-    __source_setup_id = None
-
-    __info_buffer = None
 
     def PlayerPreferences(self):
         return GstPlayerPreferences(self, const.DEBUG)
 
     def __init__(self, librarian=None):
         GStreamerPluginHandler.__init__(self)
-        super(GStreamerPlayer, self).__init__()
-        self.version_info = "GStreamer: %s" % fver(Gst.version())
+        BasePlayer.__init__(self)
+
         self._librarian = librarian
+
+        self.version_info = "GStreamer: %s" % fver(Gst.version())
         self._pipeline_desc = None
-        self._lib_id = librarian.connect("changed", self.__songs_changed)
+
+        self._volume = 1.0
+        self._paused = True
+
+        self._in_gapless_transition = False
         self._active_seeks = []
         self._active_error = False
+        self._last_position = 0
+
+        self.bin = None
+        self._vol_element = None
+        self._ext_vol_element = None
+        self._use_eq = False
+        self._eq_element = None
+        self.__info_buffer = None
+
+        self._lib_id = librarian.connect("changed", self.__songs_changed)
+        self.__atf_id = None
+        self.__bus_id = None
         self._runner = MainRunner()
 
     def __songs_changed(self, librarian, songs):
         # replaygain values might have changed, recalc volume
         if self.song and self.song in songs:
-            self.volume = self.volume
+            self._reset_replaygain()
 
     def _destroy(self):
         self._librarian.disconnect(self._lib_id)
@@ -193,6 +194,10 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
         if self._pipeline_desc:
             name += " (%s)" % self._pipeline_desc
         return name
+
+    @property
+    def has_external_volume(self):
+        return self._ext_vol_element is not None
 
     def _set_buffer_duration(self, duration):
         """Set the stream buffer duration in msecs"""
@@ -288,6 +293,20 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
             self._error(PIPELINE_ERROR)
             return False
 
+        # see if the sink provides a volume property, if yes, use it
+        sink_element = pipeline[-1]
+        if isinstance(sink_element, Gst.Bin):
+            sink_element = iter_to_list(sink_element.iterate_recurse)[-1]
+
+        self._ext_vol_element = None
+        if hasattr(sink_element.props, "volume"):
+            self._ext_vol_element = sink_element
+
+            def ext_volume_notify(*args):
+                # gets called from a thread
+                GLib.idle_add(self.notify, "volume")
+            self._ext_vol_element.connect("notify::volume", ext_volume_notify)
+
         # Make the sink of the first element the sink of the bin
         gpad = Gst.GhostPad.new('sink', pipeline[0].get_static_pad('sink'))
         bufbin.add_pad(gpad)
@@ -341,10 +360,10 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                     pass
                 else:
                     break
-        self.__source_setup_id = self.bin.connect("source-setup", source_setup)
+        self.bin.connect("source-setup", source_setup)
 
         # ReplayGain information gets lost when destroying
-        self.volume = self.volume
+        self._reset_replaygain()
 
         if self.song:
             self.bin.set_property('uri', self.song("~uri"))
@@ -364,15 +383,9 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
             self.bin.disconnect(self.__atf_id)
             self.__atf_id = None
 
-        if self.__source_setup_id:
-            self.bin.disconnect(self.__source_setup_id)
-            self.__source_setup_id = None
-
         if self.bin:
             self.bin.set_state(Gst.State.NULL)
             self.bin.get_state(timeout=STATE_CHANGE_TIMEOUT)
-            self.bin.set_property('audio-sink', None)
-            self.bin.set_property('video-sink', None)
             # BufferingWrapper cleanup
             self.bin.destroy()
             self.bin = None
@@ -381,6 +394,7 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
         self._last_position = 0
         self._active_seeks = []
 
+        self._ext_vol_element = None
         self._vol_element = None
         self._eq_element = None
 
@@ -419,7 +433,11 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
                 # can contain paths, so not sure if utf-8 in all cases
                 details = debug_info.decode("utf-8", errors="replace")
             self._error(PlayerError(message, details))
-
+        elif message.type == Gst.MessageType.STATE_CHANGED:
+            # pulsesink doesn't notify a volume change on startup
+            # and the volume is only valid in > paused states.
+            if message.src is self._ext_vol_element:
+                self.notify("volume")
         elif message.type == Gst.MessageType.STREAM_START:
             if self._in_gapless_transition:
                 print_d("Stream changed")
@@ -545,17 +563,37 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
         super(GStreamerPlayer, self).stop()
         self.__destroy_pipeline()
 
+    def do_get_property(self, property):
+        if property.name == 'volume':
+            if self.has_external_volume:
+                # pulsesink volume is only valid in PAUSED/PLAYING
+                current_state = self._ext_vol_element.get_state(0)[1]
+                if current_state >= Gst.State.PAUSED:
+                    self._volume = self._ext_vol_element.get_property("volume")
+            return self._volume
+        else:
+            raise AttributeError
+
+    def _reset_replaygain(self):
+        if not self.bin:
+            return
+
+        v = 1.0 if self.has_external_volume else self._volume
+        v = self.calc_replaygain_volume(v)
+        v = min(10.0, max(0.0, v))
+        self._vol_element.set_property('volume', v)
+
     def do_set_property(self, property, v):
         if property.name == 'volume':
             self._volume = v
-            if self.song and config.getboolean("player", "replaygain"):
-                profiles = filter(None, self.replaygain_profiles)[0]
-                fb_gain = config.getfloat("player", "fallback_gain")
-                pa_gain = config.getfloat("player", "pre_amp_gain")
-                scale = self.song.replay_gain(profiles, pa_gain, fb_gain)
-                v = min(10.0, max(0.0, v * scale)) # volume supports 0..10
-            if self.bin:
-                self._vol_element.set_property('volume', v)
+            if self.has_external_volume:
+                v = min(10.0, max(0.0, v))
+                self._ext_vol_element.set_property("volume", v)
+            else:
+                v = self.calc_replaygain_volume(v)
+                if self.bin:
+                    v = min(10.0, max(0.0, v))
+                    self._vol_element.set_property('volume', v)
         else:
             raise AttributeError
 
@@ -673,7 +711,7 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
         # set the new volume before the signals to avoid delays
         if self._in_gapless_transition:
             self.song = self._source.current
-            self.volume = self.volume
+            self._reset_replaygain()
 
         # We need to set self.song to None before calling our signal
         # handlers. Otherwise, if they try to end the song they're given
@@ -692,7 +730,6 @@ class GStreamerPlayer(BasePlayer, GStreamerPluginHandler):
         print_d("Next song")
         if self.song is not None:
             if not self._in_gapless_transition:
-                self.volume = self.volume
                 # Due to extensive problems with playbin2, we destroy the
                 # entire pipeline and recreate it each time we're not in
                 # a gapless transition.
@@ -802,12 +839,4 @@ def init(librarian):
     if Gst.debug_get_default_threshold() == Gst.DebugLevel.NONE:
         Gst.debug_set_default_threshold(Gst.DebugLevel.ERROR)
 
-    if Gst.Element.make_from_uri(
-        Gst.URIType.SRC,
-        "file:///fake/path/for/gst", ""):
-        return GStreamerPlayer(librarian)
-    else:
-        raise PlayerError(
-            _("Unable to open input files"),
-            _("GStreamer has no element to handle reading files. Check "
-              "your GStreamer installation settings."))
+    return GStreamerPlayer(librarian)

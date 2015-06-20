@@ -116,6 +116,10 @@ INITIAL = {
         # tags which get searched in addition to the ones present in the
         # song list, separate with ","
         "search_tags": "",
+
+        # If set to "true" allow directly deleting files, even on systems that
+        # support sending them to the trash.
+        "bypass_trash": "false",
     },
     "rename": {
         "spaces": "false",
@@ -167,7 +171,6 @@ setstringlist = _config.setstringlist
 getlist = _config.getlist
 setlist = _config.setlist
 set = _config.set
-setdefault = _config.setdefault
 write = _config.write
 reset = _config.reset
 add_section = _config.add_section
@@ -175,20 +178,27 @@ has_option = _config.has_option
 remove_option = _config.remove_option
 register_upgrade_function = _config.register_upgrade_function
 
+_filename = None
+"""The filename last used for loading"""
+
 
 def init(filename=None, initial=None):
+    global _filename
+
     if not _config.is_empty():
-        raise ValueError(
-            "config initialized twice without quitting: %r"
-            % _config.sections())
+        raise ValueError("config initialized twice without quitting")
+
+    _filename = filename
 
     if initial is None:
         initial = INITIAL
 
     for section, values in initial.iteritems():
+        _config.defaults.add_section(section)
         _config.add_section(section)
         for key, value in values.iteritems():
-            _config.set_inital(section, key, value)
+            _config.defaults.set(section, key, value)
+            _config.set(section, key, value)
 
     if filename is not None:
         try:
@@ -203,8 +213,18 @@ def init(filename=None, initial=None):
                 pass
 
 
-def save(filename):
-    """Writes the active config to filename, ignoring all possible errors"""
+def save(filename=None):
+    """Writes the active config to filename, ignoring all possible errors.
+
+    If not filename is given the one used for loading is used.
+    """
+
+    global _filename
+
+    if filename is None:
+        filename = _filename
+        if filename is None:
+            return
 
     print_d("Writing config...")
     try:

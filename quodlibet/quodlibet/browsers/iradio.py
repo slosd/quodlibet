@@ -14,7 +14,7 @@ import itertools
 
 from gi.repository import Gtk, GLib, Pango
 
-from quodlibet import const
+import quodlibet
 from quodlibet import qltk
 from quodlibet import util
 from quodlibet import config
@@ -39,8 +39,8 @@ from quodlibet.qltk.menubutton import MenuButton
 
 STATION_LIST_URL = \
     "http://bitbucket.org/lazka/quodlibet/downloads/radiolist.bz2"
-STATIONS_FAV = os.path.join(const.USERDIR, "stations")
-STATIONS_ALL = os.path.join(const.USERDIR, "stations_all")
+STATIONS_FAV = os.path.join(quodlibet.get_user_dir(), "stations")
+STATIONS_ALL = os.path.join(quodlibet.get_user_dir(), "stations_all")
 
 # TODO: - Do the update in a thread
 #       - Ranking: reduce duplicate stations (max 3 URLs per station)
@@ -205,11 +205,12 @@ def add_station(uri):
     if uri.lower().endswith(".pls") or uri.lower().endswith(".m3u"):
         try:
             sock = urllib.urlopen(uri)
-        except EnvironmentError, e:
+        except EnvironmentError as e:
+            encoding = util.get_locale_encoding()
             try:
-                err = e.strerror.decode(const.ENCODING, 'replace')
+                err = e.strerror.decode(encoding, 'replace')
             except (TypeError, AttributeError):
-                err = e.strerror[1].decode(const.ENCODING, 'replace')
+                err = e.strerror[1].decode(encoding, 'replace')
             qltk.ErrorMessage(None, _("Unable to add station"), err).run()
             return []
 
@@ -469,8 +470,7 @@ class QuestionBar(Gtk.InfoBar):
             bar.hide()
 
 
-class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
-    __gsignals__ = Browser.__gsignals__
+class InternetRadio(Browser, util.InstanceTracker):
 
     __stations = None
     __fav_stations = None
@@ -529,6 +529,7 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
 
     def __init__(self, library):
         super(InternetRadio, self).__init__(spacing=12)
+        self.set_orientation(Gtk.Orientation.VERTICAL)
 
         if not self.instances():
             self._init(library)
@@ -884,6 +885,9 @@ class InternetRadio(Gtk.VBox, Browser, util.InstanceTracker):
         if Query.is_parsable(text):
             self.__filter_changed(self.__searchbar, text)
             self.activate()
+
+    def get_filter_text(self):
+        return self.__searchbar.get_text()
 
     def activate(self):
         filter_ = self.__get_filter()

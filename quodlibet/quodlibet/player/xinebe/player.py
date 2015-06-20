@@ -45,8 +45,6 @@ class XineHandle(object):
 
 class XinePlaylistPlayer(BasePlayer):
     """Xine playlist player."""
-    __gproperties__ = BasePlayer._gproperties_
-    __gsignals__ = BasePlayer._gsignals_
 
     _paused = True
 
@@ -56,6 +54,7 @@ class XinePlaylistPlayer(BasePlayer):
         super(XinePlaylistPlayer, self).__init__()
         self.name = "xine"
         self.version_info = "xine-lib: " + xine_get_version_string()
+        self._volume = 1.0
         self._handle = XineHandle()
         self._supports_gapless = xine_check_version(1, 1, 1) == 1
         self._event_queue = None
@@ -152,15 +151,16 @@ class XinePlaylistPlayer(BasePlayer):
                 GLib.idle_add(self._error, PlayerError(message))
         return True
 
+    def do_get_property(self, property):
+        if property.name == 'volume':
+            return self._volume
+        else:
+            raise AttributeError
+
     def do_set_property(self, property, v):
         if property.name == 'volume':
             self._volume = v
-            if self.song and config.getboolean("player", "replaygain"):
-                profiles = filter(None, self.replaygain_profiles)[0]
-                fb_gain = config.getfloat("player", "fallback_gain")
-                pa_gain = config.getfloat("player", "pre_amp_gain")
-                scale = self.song.replay_gain(profiles, pa_gain, fb_gain)
-                v = max(0.0, v * scale)
+            v = self.calc_replaygain_volume(v)
             v = min(100, int(v * 100))
             if not self._destroyed:
                 xine_set_param(self._stream, XINE_PARAM_AUDIO_AMP_LEVEL, v)

@@ -13,15 +13,15 @@ import os
 import sys
 import warnings
 
-import quodlibet.const
-import quodlibet.util
-
-from quodlibet.util import set_process_title
+from quodlibet.util import set_process_title, environ, cached_func
+from quodlibet.util import windows
 from quodlibet.util.path import mkdir, unexpand
 from quodlibet.util.i18n import GlibTranslations, set_i18n_envvars, \
     fixup_i18n_envvars
 from quodlibet.util.dprint import print_, print_d, print_w, print_e
+from quodlibet import const
 from quodlibet.const import MinVersions, Version
+
 
 PLUGIN_DIRS = ["editing", "events", "playorder", "songsmenu", "playlist",
                "gstreamer", "covers"]
@@ -92,6 +92,57 @@ class Application(object):
             window.hide()
 
 app = Application()
+
+
+def is_release():
+    """Returns whether the running version is a stable release or under
+    development.
+    """
+
+    return const.VERSION_TUPLE[-1] != -1
+
+
+@cached_func
+def get_base_dir():
+    """The path to the quodlibet package"""
+
+    file_path = __file__
+    if os.name == "nt":
+        file_path = file_path.decode(sys.getfilesystemencoding())
+    return os.path.dirname(os.path.realpath(file_path))
+
+
+@cached_func
+def get_image_dir():
+    """The path to the image directory in the quodlibet package"""
+
+    return os.path.join(get_base_dir(), "images")
+
+
+@cached_func
+def get_user_dir():
+    """Place where QL saves its state, database, config etc."""
+
+    if os.name == "nt":
+        USERDIR = os.path.join(windows.get_appdate_dir(), "Quod Libet")
+    else:
+        USERDIR = os.path.join(os.path.expanduser("~"), ".quodlibet")
+
+    if 'QUODLIBET_USERDIR' in environ:
+        USERDIR = environ['QUODLIBET_USERDIR']
+
+    # XXX: Exec conf.py in this directory, used to override const globals
+    # e.g. for setting USERDIR for the Windows portable version
+    # Note: execfile doesn't handle unicode paths on windows, so encode.
+    # (this doesn't use the old win api in case of str compared to os.*)
+    _CONF_PATH = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "conf.py")
+    try:
+        execfile(_CONF_PATH)
+    except IOError:
+        pass
+
+    return USERDIR
 
 
 def _fix_gst_leaks():
@@ -200,6 +251,13 @@ def _gtk_init():
     warnings.filterwarnings(
         'ignore', '.*The property GtkAlignment:[^\s]+ is deprecated.*',
         Warning)
+
+    # Newer glib is noisy regarding deprecated signals/properties
+    # even with stable releases.
+    if is_release():
+        warnings.filterwarnings(
+            'ignore', '.* It will be removed in a future version.',
+            Warning)
 
     settings = Gtk.Settings.get_default()
     with warnings.catch_warnings():
@@ -352,14 +410,14 @@ def _gettext_init():
     """Call before using gettext helpers"""
 
     # set by tests
-    if "QUODLIBET_NO_TRANS" in os.environ:
+    if "QUODLIBET_NO_TRANS" in environ:
         return
 
     set_i18n_envvars()
     fixup_i18n_envvars()
 
-    print_d("LANGUAGE: %r" % os.environ.get("LANGUAGE"))
-    print_d("LANG: %r" % os.environ.get("LANG"))
+    print_d("LANGUAGE: %r" % environ.get("LANGUAGE"))
+    print_d("LANG: %r" % environ.get("LANG"))
 
     try:
         locale.setlocale(locale.LC_ALL, '')
@@ -367,12 +425,13 @@ def _gettext_init():
         pass
 
     # Use the locale dir in ../build/share/locale if there is one
-    localedir = os.path.dirname(quodlibet.const.BASEDIR)
+    base_dir = get_base_dir()
+    localedir = os.path.dirname(base_dir)
     localedir = os.path.join(localedir, "build", "share", "locale")
     if not os.path.isdir(localedir) and os.name == "nt":
         # py2exe case
         localedir = os.path.join(
-            quodlibet.const.BASEDIR, "..", "..", "share", "locale")
+            base_dir, "..", "..", "share", "locale")
 
     if os.path.isdir(localedir):
         print_d("Using local localedir: %r" % unexpand(localedir))
@@ -388,7 +447,7 @@ def _gettext_init():
     else:
         print_d("Translations loaded: %r" % unexpand(t.path))
 
-    debug_text = os.environ.get("QUODLIBET_TEST_TRANS")
+    debug_text = environ.get("QUODLIBET_TEST_TRANS")
     t.install(unicode=True, debug_text=debug_text)
 
 
@@ -419,7 +478,7 @@ def init(icon=None, proc_title=None, name=None):
     print_d("Entering quodlibet.init")
 
     _gtk_init()
-    _gtk_icons_init(quodlibet.const.IMAGEDIR, icon)
+    _gtk_icons_init(get_image_dir(), icon)
     _gst_init()
     _dbus_init()
     _init_debug()
@@ -435,7 +494,7 @@ def init(icon=None, proc_title=None, name=None):
     if name:
         GLib.set_application_name(name)
 
-    mkdir(quodlibet.const.USERDIR, 0750)
+    mkdir(get_user_dir(), 0750)
 
     print_d("Finished initialization.")
 
@@ -444,9 +503,9 @@ def init_plugins(no_plugins=False):
     print_d("Starting plugin manager")
 
     from quodlibet import plugins
-    folders = [os.path.join(quodlibet.const.BASEDIR, "ext", kind)
+    folders = [os.path.join(get_base_dir(), "ext", kind)
                for kind in PLUGIN_DIRS]
-    folders.append(os.path.join(quodlibet.const.USERDIR, "plugins"))
+    folders.append(os.path.join(get_user_dir(), "plugins"))
     print_d("Scanning folders: %s" % folders)
     pm = plugins.init(folders, no_plugins)
     pm.rescan()
@@ -461,14 +520,6 @@ def init_plugins(no_plugins=False):
     return pm
 
 
-def init_backend(backend, librarian):
-    import quodlibet.player
-    print_d("Initializing audio backend (%s)" % backend)
-    backend = quodlibet.player.init(backend)
-    device = backend.init(librarian)
-    return device
-
-
 def enable_periodic_save(save_library):
     import quodlibet.library
     from quodlibet.util import copool
@@ -478,7 +529,7 @@ def enable_periodic_save(save_library):
 
     def periodic_config_save():
         while 1:
-            config.save(quodlibet.const.CONFIG)
+            config.save()
             yield
 
     copool.add(periodic_config_save, timeout=timeout)
