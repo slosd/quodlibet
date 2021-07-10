@@ -12,13 +12,14 @@ from __future__ import absolute_import
 
 import os
 
-from gi.repository import Gtk, Pango, Gdk, Gio
+from gi.repository import Gtk, Pango, Gdk, Gio, GLib
 
 from .prefs import Preferences, DEFAULT_PATTERN_TEXT
 from quodlibet.browsers.albums.models import (AlbumModel,
     AlbumFilterModel, AlbumSortModel)
 from quodlibet.browsers.albums.main import (get_cover_size,
-    AlbumTagCompletion, PreferencesButton as AlbumPreferencesButton, VisibleUpdate)
+    AlbumTagCompletion, PreferencesButton as AlbumPreferencesButton)
+from quodlibet.browsers.covergrid.model import AlbumListModel
 
 import quodlibet
 from quodlibet import app
@@ -95,29 +96,40 @@ class PreferencesButton(AlbumPreferencesButton):
         self.pack_start(button, True, True, 0)
 
 
-class IconView(Gtk.IconView):
-    # XXX: disable height for width etc. Speeds things up and doesn't seem
-    # to break anyhting in a scrolled window
+class AlbumWidget(Gtk.Box):
 
-    def do_get_preferred_width_for_height(self, height):
-        return (1, 1)
+    def __init__(self, cover_width, padding, **kwargs):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL,
+              hexpand=True, vexpand=True, margin=padding, **kwargs)
+
+        self.__width = cover_width + 2 * padding
+
+        self._image = Gtk.Image(
+            width_request=cover_width,
+            height_request=cover_width)
+        self._label = Gtk.Label(
+            ellipsize=Pango.EllipsizeMode.END,
+            justify=Gtk.Justification.CENTER)
+
+        self.pack_start(self._image, True, True, 0)
+        self.pack_start(self._label, True, True, 0)
+
+    def set_width(self, width):
+        self.__width = width + 2 * self.props.margin
+
+    def set_markup(self, markup):
+        self._label.set_markup(markup)
+
+    def set_cover(self, surface):
+        self._image.props.surface = surface
 
     def do_get_preferred_width(self):
-        return (1, 1)
-
-    def do_get_preferred_height(self):
-        return (1, 1)
-
-    def do_get_preferred_height_for_width(self, width):
-        return (1, 1)
+        return (self.__width, self.__width)
 
 
-class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
-                DisplayPatternMixin):
+class CoverGrid(Browser, util.InstanceTracker, DisplayPatternMixin):
     __gsignals__ = Browser.__gsignals__
     __model = None
-    __last_render = None
-    __last_render_surface = None
 
     _PATTERN_FN = os.path.join(quodlibet.get_user_dir(), "album_pattern")
     _DEFAULT_PATTERN_TEXT = DEFAULT_PATTERN_TEXT
@@ -171,12 +183,7 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
     def update_mag(klass):
         mag = config.getfloat("browsers", "covergrid_magnification", 3.)
         for covergrid in klass.instances():
-            covergrid.__cover.set_property('width', get_cover_size() * mag + 8)
-            covergrid.__cover.set_property('height',
-                get_cover_size() * mag + 8)
-            covergrid.view.set_item_width(get_cover_size() * mag + 8)
-            covergrid.view.queue_resize()
-            covergrid.redraw()
+            covergrid.update_covergrid_magnification(mag)
 
     def redraw(self):
         model = self.__model
@@ -227,84 +234,78 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
         sw.set_shadow_type(Gtk.ShadowType.IN)
         model_sort = AlbumSortModel(model=self.__model)
         model_filter = AlbumFilterModel(child_model=model_sort)
-        self.view = view = IconView(model_filter)
-        #view.set_item_width(get_cover_size() + 12)
-        self.view.set_row_spacing(config.getint("browsers", "row_spacing", 6))
-        self.view.set_column_spacing(config.getint("browsers",
-            "column_spacing", 6))
-        self.view.set_item_padding(config.getint("browsers",
-            "item_padding", 6))
-        self.view.set_has_tooltip(True)
-        self.view.connect("query-tooltip", self._show_tooltip)
-
+        model_list = AlbumListModel(model_filter)
         self.__bg_filter = background_filter()
         self.__filter = None
         model_filter.set_visible_func(self.__parse_query)
 
         mag = config.getfloat("browsers", "covergrid_magnification", 3.)
+        cover_size = get_cover_size() * mag
+        item_padding = config.getint("browsers", "item_padding", 6)
 
-        self.view.set_item_width(get_cover_size() * mag + 8)
+        def create_widget(item):
+            widget = AlbumWidget(cover_size, item_padding, has_tooltip=True)
 
-        self.__cover = render = Gtk.CellRendererPixbuf()
-        render.set_property('width', get_cover_size() * mag + 8)
-        render.set_property('height', get_cover_size() * mag + 8)
-        view.pack_start(render, False)
+            def setup():
+                if not item.album:
+                    surface = None
+                elif item.cover:
+                    pixbuf = item.cover
+                    pixbuf = add_border_widget(pixbuf, self.view)
+                    surface = get_surface_for_pixbuf(self, pixbuf)
+                else:
+                    surface = self._no_cover
+                widget.set_cover(surface)
+                widget.set_markup(self.__album_markup(item.album))
 
-        def cell_data_pb(view, cell, model, iter_, no_cover):
-            item = model.get_value(iter_)
+            def scan_cover(widget, cr):
+                widget.disconnect(draw_handler_id)
+                item.scan_cover(
+                    scale_factor=self.get_scale_factor() * mag,
+                    cancel=self._cover_cancel)
 
-            if item.album is None:
-                surface = None
-            elif item.cover:
-                pixbuf = item.cover
-                pixbuf = add_border_widget(pixbuf, self.view)
-                surface = get_surface_for_pixbuf(self, pixbuf)
-                # don't cache, too much state has an effect on the result
-                self.__last_render_surface = None
-            else:
-                surface = no_cover
+            def get_tooltip(tooltip):
+                tooltip.set_markup(self.__album_markup(item.album))
+                return True
 
-            if self.__last_render_surface == surface:
-                return
-            self.__last_render_surface = surface
-            cell.set_property("surface", surface)
+            setup()
+            item.connect('notify', lambda _, __: setup())
+            draw_handler_id = widget.connect('draw',
+                util.DeferredSignal(scan_cover, timeout=50, priority=GLib.PRIORITY_LOW))
+            widget.connect("query-tooltip",
+                lambda widget, x, y, keyboard_tip, tooltip: get_tooltip(tooltip))
+            eb = Gtk.EventBox()
+            eb.connect('button-press-event', self.__rightclick, library)
+            eb.connect('popup-menu', self.__popup, library)
+            eb.add(widget)
+            eb.show_all()
+            return eb
 
-        view.set_cell_data_func(render, cell_data_pb, self._no_cover)
+        self.view = view = Gtk.FlowBox()
+        view.get_model = lambda: model_filter
+        view.bind_model(model_list, create_widget)
 
-        self.__text_cells = render = Gtk.CellRendererText()
-        render.set_visible(config.getboolean("browsers", "album_text", True))
-        render.set_property('alignment', Pango.Alignment.CENTER)
-        render.set_property('xalign', 0.5)
-        render.set_property('ellipsize', Pango.EllipsizeMode.END)
-        view.pack_start(render, False)
+        view.props.activate_on_single_click = False
+        view.props.homogeneous = True
+        view.props.min_children_per_line = 1
+        view.props.max_children_per_line = 10
+        view.props.row_spacing = config.getint("browsers", "row_spacing", 6)
+        view.props.column_spacing = config.getint("browsers", "column_spacing", 6)
 
-        def cell_data(view, cell, model, iter_, data):
-            album = model.get_album(iter_)
+        #TODO: this seems to be bugged; clicks always add to selection
+        #self.view.props.selection_mode = Gtk.SelectionMode.MULTIPLE
 
-            if album is None:
-                text = "<b>%s</b>" % _("All Albums")
-                text += "\n" + ngettext("%d album", "%d albums",
-                        len(model) - 1) % (len(model) - 1)
-                markup = text
-            else:
-                markup = self.display_pattern % album
+        view.set_hadjustment(self.scrollwin.get_hadjustment())
+        view.set_vadjustment(self.scrollwin.get_vadjustment())
 
-            if self.__last_render == markup:
-                return
-            self.__last_render = markup
-            cell.markup = markup
-            cell.set_property('markup', markup)
-
-        view.set_cell_data_func(render, cell_data, None)
-
-        view.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
-        sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sw.props.hscrollbar_policy = Gtk.PolicyType.NEVER
+        sw.props.vscrollbar_policy = Gtk.PolicyType.AUTOMATIC
         sw.add(view)
 
-        view.connect('item-activated', self.__play_selection, None)
+        view.connect('child-activated', self.__play_selection, None)
 
         self.__sig = connect_destroy(
-            view, 'selection-changed',
+            view, 'selected-children-changed',
             util.DeferredSignal(self.__update_songs, owner=self))
 
         targets = [("text/x-quodlibet-songs", Gtk.TargetFlags.SAME_APP, 1),
@@ -314,9 +315,6 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
         view.drag_source_set(
             Gdk.ModifierType.BUTTON1_MASK, targets, Gdk.DragAction.COPY)
         view.connect("drag-data-get", self.__drag_data_get) # NOT WORKING
-        connect_obj(view, 'button-press-event',
-            self.__rightclick, view, library)
-        connect_obj(view, 'popup-menu', self.__popup, view, library)
 
         self.accelerators = Gtk.AccelGroup()
         search = SearchBarBox(completion=AlbumTagCompletion(),
@@ -332,8 +330,6 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
 
         self.connect("destroy", self.__destroy)
 
-        self.enable_row_update(view, sw, self.view)
-
         self.__update_filter()
 
         self.connect('key-press-event', self.__key_pressed, library.librarian)
@@ -343,6 +339,25 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
                 app.cover_manager, "cover-changed", self._cover_changed)
 
         self.show_all()
+
+    def update_covergrid_magnification(self, mag):
+        size = get_cover_size() * mag
+
+        def update(widget):
+            widget.set_width(size)
+
+        self.view.foreach(lambda child: update(child.get_child().get_child()))
+        self.view.emit('check-resize')
+
+    def __album_markup(self, album):
+        if album:
+            return self.display_pattern % album
+        else:
+            albums_len = len(self.view.get_model()) - 1
+            text = "<b>%s</b>" % _("All Albums")
+            text += "\n" + ngettext(
+                "%d album", "%d albums", albums_len) % albums_len
+            return text
 
     def _cover_changed(self, manager, songs):
         model = self.__model
@@ -361,7 +376,7 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
                 window.show()
             return True
         elif qltk.is_accel(event, "<Primary>Return", "<Primary>KP_Enter"):
-            qltk.enqueue(self.__get_selected_songs(sort=True))
+            qltk.enqueue(self.__get_selected_songs())
             return True
         elif qltk.is_accel(event, "<alt>Return"):
             songs = self.__get_selected_songs()
@@ -371,36 +386,8 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
             return True
         return False
 
-    def _row_needs_update(self, model, iter_):
-        item = model.get_value(iter_)
-        return item.album is not None and not item.scanned
-
-    def _update_row(self, filter_model, iter_):
-        sort_model = filter_model.get_model()
-        model = sort_model.get_model()
-        iter_ = filter_model.convert_iter_to_child_iter(iter_)
-        iter_ = sort_model.convert_iter_to_child_iter(iter_)
-        tref = Gtk.TreeRowReference.new(model, model.get_path(iter_))
-        mag = config.getfloat("browsers", "covergrid_magnification", 3.)
-
-        def callback():
-            path = tref.get_path()
-            if path is not None:
-                model.row_changed(path, model.get_iter(path))
-            # XXX: icon view seems to ignore row_changed signals for pixbufs..
-            self.queue_draw()
-
-        item = model.get_value(iter_)
-        scale_factor = self.get_scale_factor() * mag
-        item.scan_cover(scale_factor=scale_factor,
-                        callback=callback,
-                        cancel=self._cover_cancel)
-
     def __destroy(self, browser):
         self._cover_cancel.cancel()
-        self.disable_row_update()
-
-        self.view.set_model(None)
 
         klass = type(browser)
         if not klass.instances():
@@ -459,53 +446,39 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
                     return False
         return True
 
-    def __rightclick(self, view, event, library):
-        x = int(event.x)
-        y = int(event.y)
-        current_path = view.get_path_at_pos(x, y)
-        if event.button == Gdk.BUTTON_SECONDARY and current_path:
-            if not view.path_is_selected(current_path):
-                view.unselect_all()
-            view.select_path(current_path)
-            self.__popup(view, library)
+    def __rightclick(self, widget, event, library):
+        if event.button == Gdk.BUTTON_SECONDARY:
+            #TODO: select item
+            #if not widget.is_selected():
+            #    self.view.unselect_all()
+            #view.select_path(current_path)
+            self.__popup(widget, library)
 
-    def __popup(self, view, library):
-
-        albums = self.__get_selected_albums()
-        songs = self.__get_songs_from_albums(albums)
-
+    def __popup(self, widget, library):
         items = []
-        num = len(albums)
+        num = len(self.view.get_selected_children())
         button = MenuItem(
             ngettext("Reload album _cover", "Reload album _covers", num),
             Icons.VIEW_REFRESH)
-        button.connect('activate', self.__refresh_album, view)
+        button.connect('activate', self.__refresh_album, widget)
         items.append(button)
 
+        songs = list(self.__get_selected_songs())
         menu = SongsMenu(library, songs, items=[items])
         menu.show_all()
-        popup_menu_at_widget(menu, view,
+        popup_menu_at_widget(menu, widget,
             Gdk.BUTTON_SECONDARY,
             Gtk.get_current_event_time())
 
-    def _show_tooltip(self, widget, x, y, keyboard_tip, tooltip):
-        w = self.scrollwin.get_hadjustment().get_value()
-        z = self.scrollwin.get_vadjustment().get_value()
-        path = widget.get_path_at_pos(int(x + w), int(y + z))
-        if path is None:
-            return False
-        model = widget.get_model()
-        iter = model.get_iter(path)
-        album = model.get_album(iter)
-        if album is None:
-            text = "<b>%s</b>" % _("All Albums")
-            text += "\n" + ngettext("%d album",
-                "%d albums", len(model) - 1) % (len(model) - 1)
-            markup = text
-        else:
-            markup = self.display_pattern % album
-        tooltip.set_markup(markup)
-        return True
+    @property
+    def __selected_rows(self):
+        view = self.view
+        return (view.get_model()[c.get_index()]
+                for c in view.get_selected_children())
+
+    @property
+    def __selected_paths(self):
+        return (r.path for r in self.__selected_rows)
 
     def __refresh_album(self, menuitem, view):
         items = self.__get_selected_items()
@@ -517,14 +490,10 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
                 model.row_changed(model.get_path(iter_), iter_)
 
     def __get_selected_items(self):
-        model = self.view.get_model()
-        paths = self.view.get_selected_items()
-        return model.get_items(paths)
+        return self.view.get_model().get_items(self.__selected_paths)
 
     def __get_selected_albums(self):
-        model = self.view.get_model()
-        paths = self.view.get_selected_items()
-        return model.get_albums(paths)
+        return self.view.get_model().get_albums(self.__selected_paths)
 
     def __get_songs_from_albums(self, albums, sort=True):
         # Sort first by how the albums appear in the model itself,
@@ -588,26 +557,33 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
         return [row[0].album.key for row in model if row[0].album]
 
     def select_by_func(self, func, scroll=True, one=False):
-        model = self.view.get_model()
-        if not model:
-            return False
-
-        selection = self.view.get_selected_items()
         first = True
-        for row in model:
+        for i, row in enumerate(self.view.get_model()):
             if func(row):
                 if not first:
-                    selection.select_path(row.path)
+                    self.view.select_child(self.view.get_child_at_index(i))
                     continue
                 self.view.unselect_all()
-                self.view.select_path(row.path)
-                self.view.set_cursor(row.path, None, False)
+                child = self.view.get_child_at_index(i)
+                self.view.select_child(child)
                 if scroll:
-                    self.view.scroll_to_path(row.path, True, 0.5, 0.5)
+                    self.__scroll_to_child(child)
                 first = False
                 if one:
                     break
         return not first
+
+    def __scroll_to_child(self, child):
+        va = self.scrollwin.get_vadjustment().props
+        try:
+            x, y = child.translate_coordinates(self.scrollwin, 0, va.value)
+            h = child.get_allocation().height
+            if y < va.value:
+                va.value = y
+            elif y + h > va.value + va.page_size:
+                va.value = y - va.page_size + h
+        except TypeError:
+            pass
 
     def filter_albums(self, values):
         self.__inhibit()
@@ -622,7 +598,7 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
         self.filter_text("")
 
     def activate(self):
-        self.view.emit('selection-changed')
+        self.view.emit('selected-children-changed')
 
     def __inhibit(self):
         self.view.handler_block(self.__sig)
@@ -660,7 +636,7 @@ class CoverGrid(Browser, util.InstanceTracker, VisibleUpdate,
 
     def __get_config_string(self):
         model = self.view.get_model()
-        paths = self.view.get_selected_items()
+        paths = self.__selected_paths
 
         # All is selected
         if model.contains_all(paths):
